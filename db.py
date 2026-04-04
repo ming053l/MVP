@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import sqlite3
 from pathlib import Path
@@ -23,7 +24,19 @@ class EngineDB:
     def __exit__(self, exc_type, exc, tb) -> None:
         if exc_type is None:
             self.conn.commit()
+        else:
+            self.conn.rollback()
         self.close()
+
+    @contextmanager
+    def transaction(self):
+        try:
+            yield
+        except Exception:
+            self.conn.rollback()
+            raise
+        else:
+            self.conn.commit()
 
     def init_schema(self) -> None:
         self.conn.executescript(
@@ -140,7 +153,7 @@ class EngineDB:
     def _execute_many(self, query: str, rows: Iterable[Dict[str, Any]]) -> None:
         self.conn.executemany(query, list(rows))
 
-    def upsert_brand_records(self, rows: Iterable[Dict[str, Any]]) -> int:
+    def upsert_brand_records(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -166,10 +179,11 @@ class EngineDB:
             """,
             rows,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return len(rows)
 
-    def upsert_image_records(self, rows: Iterable[Dict[str, Any]]) -> int:
+    def upsert_image_records(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -210,10 +224,11 @@ class EngineDB:
             """,
             rows,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return len(rows)
 
-    def upsert_logo_instances(self, rows: Iterable[Dict[str, Any]]) -> int:
+    def upsert_logo_instances(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -265,7 +280,8 @@ class EngineDB:
             """,
             rows,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return len(rows)
 
     def existing_phashes(self) -> set[str]:
@@ -333,7 +349,7 @@ class EngineDB:
         ).fetchall()
         return {str(row["quality_status"]): int(row["total"]) for row in rows}
 
-    def update_image_quality(self, rows: Iterable[Dict[str, Any]]) -> int:
+    def update_image_quality(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -350,7 +366,8 @@ class EngineDB:
             """,
             rows,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return len(rows)
 
     def export_joined_records(self) -> List[Dict[str, Any]]:
@@ -430,7 +447,7 @@ class EngineDB:
         rows = self.conn.execute(query, params).fetchall()
         return [json.loads(str(row["raw_json"])) for row in rows]
 
-    def apply_review_decisions(self, rows: Iterable[Dict[str, Any]]) -> int:
+    def apply_review_decisions(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -444,5 +461,6 @@ class EngineDB:
             """,
             rows,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return len(rows)

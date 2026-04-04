@@ -8,6 +8,7 @@ from .annotations import imported_logo_instances, merge_signals
 from .db import EngineDB
 from .dedupe import compute_phash
 from .qwen_reasoning import build_qwen_prompt_payload, run_qwen_logo_reasoning
+from .record_types import BrandCatalogEntry, BrandKnowledgeRecord, ProductRecord
 from .schema import (
     canonical_brand_id,
     image_external_key,
@@ -36,7 +37,7 @@ def load_run_payloads(run_dir: str | Path) -> Dict[str, List[Dict[str, Any]]]:
     }
 
 
-def brand_rows_from_records(brand_records: Iterable[Dict[str, Any]], tier: str) -> List[Dict[str, Any]]:
+def brand_rows_from_records(brand_records: Iterable[BrandKnowledgeRecord], tier: str) -> List[Dict[str, Any]]:
     now = utcnow_iso()
     rows = []
     for record in brand_records:
@@ -64,7 +65,7 @@ def brand_rows_from_records(brand_records: Iterable[Dict[str, Any]], tier: str) 
 
 def ingest_image_records(
     db: EngineDB,
-    records: Iterable[Dict[str, Any]],
+    records: Iterable[ProductRecord],
     tier: str,
     dry_run: bool = False,
     resume: bool = False,
@@ -124,7 +125,8 @@ def ingest_image_records(
         )
     stats["inserted"] = len(rows)
     if not dry_run:
-        db.upsert_image_records(rows)
+        with db.transaction():
+            db.upsert_image_records(rows, commit=False)
     return stats
 
 
@@ -135,7 +137,7 @@ def annotate_from_segment_records(
     dry_run: bool = False,
     resume: bool = False,
     enrich: bool = False,
-    brand_catalog: List[Dict[str, Any]] | None = None,
+    brand_catalog: List[BrandCatalogEntry] | None = None,
     clip_retrieval_model_id: str = "openai/clip-vit-base-patch32",
     caption_model_id: str = "Salesforce/blip-image-captioning-base",
     skip_ocr: bool = False,
@@ -357,7 +359,8 @@ def annotate_from_segment_records(
         "skipped_existing": skipped_existing,
     }
     if not dry_run:
-        db.upsert_logo_instances(rows)
+        with db.transaction():
+            db.upsert_logo_instances(rows, commit=False)
     return stats
 
 
@@ -373,7 +376,8 @@ def import_run(
     payloads = load_run_payloads(run_dir)
     brand_rows = brand_rows_from_records(payloads["brands"], tier=brand_tier)
     if not dry_run:
-        db.upsert_brand_records(brand_rows)
+        with db.transaction():
+            db.upsert_brand_records(brand_rows, commit=False)
 
     image_stats = ingest_image_records(db, payloads["images"], tier=image_tier, dry_run=dry_run, resume=resume)
     instance_stats = annotate_from_segment_records(

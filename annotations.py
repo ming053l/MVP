@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 from typing import Any, Dict, Iterable, List
 
+from .record_types import ProductRecord
 from .schema import canonical_brand_id, image_external_key, json_text, logo_instance_id, utcnow_iso
 
 
@@ -10,7 +11,7 @@ def normalize_text(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
-def metadata_ocr_signal(record: Dict[str, Any]) -> Dict[str, Any]:
+def metadata_ocr_signal(record: ProductRecord) -> Dict[str, Any]:
     brand = str(record.get("brand") or "").strip()
     fields = [
         str(record.get("logo_grounding_label") or ""),
@@ -36,7 +37,7 @@ def metadata_ocr_signal(record: Dict[str, Any]) -> Dict[str, Any]:
     return {"engine": "metadata_ocr", "text": None, "confidence": 0.0, "matched_brand_name": None}
 
 
-def similarity_brand_signal(record: Dict[str, Any], brand_name_index: Dict[str, str]) -> Dict[str, Any]:
+def similarity_brand_signal(record: ProductRecord, brand_name_index: Dict[str, str]) -> Dict[str, Any]:
     candidates = [
         str(record.get("brand") or ""),
         str(record.get("logo_grounding_label") or ""),
@@ -157,7 +158,7 @@ def caption_brand_signal(caption_payload: Dict[str, Any] | None, brand_name_inde
 
 
 def merge_signals(
-    record: Dict[str, Any],
+    record: ProductRecord,
     brand_name_index: Dict[str, str],
     *,
     ocr_payload: Dict[str, Any] | None = None,
