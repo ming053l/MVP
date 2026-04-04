@@ -705,7 +705,7 @@ def gate_images(
         result = evaluate_image_quality(
             image_id=str(row["image_id"]),
             record=record,
-            image_path=str(row["local_image_path"] or ""),
+            image_path=row["local_image_path"],
             image_phash=str(row["image_phash"]) if row["image_phash"] else None,
             accepted_phashes=accepted_phashes,
             clip_scorer=clip_scorer,

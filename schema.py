@@ -167,7 +167,10 @@ def json_text(value: object) -> str:
 def resolve_local_path(value: str | None) -> str | None:
     if not value:
         return None
-    return str(Path(value))
+    normalized = str(Path(value)).strip()
+    if not normalized or normalized == ".":
+        return None
+    return normalized
 
 
 def _extract_json_block(text: str) -> str | None:

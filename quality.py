@@ -15,7 +15,8 @@ DEFAULT_ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "JPG"}
 
 
 def phash_hamming_distance(left: str, right: str) -> int:
-    return int((int(left, 16) ^ int(right, 16)).bit_count())
+    value = int(left, 16) ^ int(right, 16)
+    return bin(value).count("1")
 
 
 def laplacian_variance(gray_pixels: np.ndarray) -> float:
@@ -96,6 +97,20 @@ def evaluate_image_quality(
     gates: List[Dict[str, Any]] = []
     trusted_catalog = is_trusted_catalog_record(record)
 
+    if not image_path:
+        return {
+            "image_id": image_id,
+            "quality_status": "error",
+            "quality_score": 0.0,
+            "failure_reason": "missing_local_image",
+            "gates": [{"gate": "file", "outcome": "failed", "reason": "missing_local_image"}],
+            "difficulty_flags": [],
+            "quality_gate_json": json_text({"gates": [{"gate": "file", "outcome": "failed", "reason": "missing_local_image"}]}),
+            "difficulty_flags_json": json_text([]),
+            "last_gated_at": now,
+            "updated_at": now,
+        }
+
     path = Path(image_path)
     if not path.exists():
         return {
@@ -110,8 +125,41 @@ def evaluate_image_quality(
             "last_gated_at": now,
             "updated_at": now,
         }
+    if not path.is_file():
+        return {
+            "image_id": image_id,
+            "quality_status": "error",
+            "quality_score": 0.0,
+            "failure_reason": "invalid_local_image_path",
+            "gates": [{"gate": "file", "outcome": "failed", "reason": "invalid_local_image_path", "path": str(path)}],
+            "difficulty_flags": [],
+            "quality_gate_json": json_text(
+                {"gates": [{"gate": "file", "outcome": "failed", "reason": "invalid_local_image_path", "path": str(path)}]}
+            ),
+            "difficulty_flags_json": json_text([]),
+            "last_gated_at": now,
+            "updated_at": now,
+        }
 
-    with Image.open(path) as image:
+    try:
+        image_ctx = Image.open(path)
+    except Exception as exc:
+        return {
+            "image_id": image_id,
+            "quality_status": "error",
+            "quality_score": 0.0,
+            "failure_reason": "image_open_error",
+            "gates": [{"gate": "file", "outcome": "failed", "reason": "image_open_error", "error": str(exc), "path": str(path)}],
+            "difficulty_flags": [],
+            "quality_gate_json": json_text(
+                {"gates": [{"gate": "file", "outcome": "failed", "reason": "image_open_error", "error": str(exc), "path": str(path)}]}
+            ),
+            "difficulty_flags_json": json_text([]),
+            "last_gated_at": now,
+            "updated_at": now,
+        }
+
+    with image_ctx as image:
         image = image.convert("RGB")
         width, height = image.size
         image_format = str(getattr(image, "format", None) or path.suffix.replace(".", "").upper() or "UNKNOWN")
