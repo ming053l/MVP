@@ -4,15 +4,20 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import torch
 
 from .annotator import annotate_db_proposals, brand_catalog_from_db
 from .backends import (
+    BackendProtocol,
+    BLIPCaptionEngine,
+    CLIPBrandRetriever,
     CLIPLogoQualityScorer,
     GroundingDINOProposalDetector,
+    LLaMAVLMEngine,
     PaddleOCREngine,
+    QwenKnowledgeEngine,
     YOLOWorldLogoPrescreener,
 )
 from .db import EngineDB
@@ -54,69 +59,65 @@ def preflight_models(
     prescreen_threshold: float = 0.3,
 ) -> Dict[str, Any]:
     statuses: Dict[str, Any] = {"with_sam3": with_sam3, "use_vlm": use_vlm}
+    registry: List[tuple[str, bool, Callable[[], BackendProtocol], Dict[str, Any]]] = [
+        (
+            "grounding_dino",
+            not skip_detector,
+            lambda: GroundingDINOProposalDetector(model_id=grounding_model_id),
+            {"model_id": grounding_model_id},
+        ),
+        (
+            "paddleocr",
+            not skip_ocr,
+            lambda: PaddleOCREngine(lang="en"),
+            {},
+        ),
+        (
+            "clip_logo_gate",
+            not skip_clip,
+            lambda: CLIPLogoQualityScorer(),
+            {},
+        ),
+        (
+            "clip_retrieval",
+            not skip_clip_retrieval,
+            lambda: CLIPBrandRetriever(),
+            {},
+        ),
+        (
+            "blip_caption",
+            not skip_captioning,
+            lambda: BLIPCaptionEngine(),
+            {},
+        ),
+        (
+            "vlm",
+            use_vlm,
+            lambda: LLaMAVLMEngine(model_id=vlm_model_id),
+            {"model_id": vlm_model_id},
+        ),
+        (
+            "qwen_qa",
+            use_qwen_qa,
+            lambda: QwenKnowledgeEngine(model_id=qwen_model_id),
+            {"model_id": qwen_model_id},
+        ),
+        (
+            "yolo_prescreen",
+            not skip_prescreen,
+            lambda: YOLOWorldLogoPrescreener(conf_threshold=prescreen_threshold),
+            {"threshold": prescreen_threshold},
+        ),
+    ]
 
-    detector = None if skip_detector else GroundingDINOProposalDetector(model_id=grounding_model_id)
-    statuses["grounding_dino"] = {
-        "enabled": not skip_detector,
-        "available": None if detector is None else detector.available,
-        "error": "disabled" if detector is None else detector.error,
-        "model_id": grounding_model_id,
-    }
-
-    ocr_engine = None if skip_ocr else PaddleOCREngine(lang="en")
-    statuses["paddleocr"] = {
-        "enabled": not skip_ocr,
-        "available": None if ocr_engine is None else ocr_engine.available,
-        "error": "disabled" if ocr_engine is None else ocr_engine.error,
-    }
-
-    clip_scorer = None if skip_clip else CLIPLogoQualityScorer()
-    statuses["clip_logo_gate"] = {
-        "enabled": not skip_clip,
-        "available": None if clip_scorer is None else clip_scorer.available,
-        "error": "disabled" if clip_scorer is None else clip_scorer.error,
-    }
-
-    clip_retriever = None if skip_clip_retrieval else CLIPBrandRetriever()
-    statuses["clip_retrieval"] = {
-        "enabled": not skip_clip_retrieval,
-        "available": None if clip_retriever is None else clip_retriever.available,
-        "error": "disabled" if clip_retriever is None else clip_retriever.error,
-    }
-
-    captioner = None if skip_captioning else BLIPCaptionEngine()
-    statuses["blip_caption"] = {
-        "enabled": not skip_captioning,
-        "available": None if captioner is None else captioner.available,
-        "error": "disabled" if captioner is None else captioner.error,
-    }
-
-    vlm_engine = None
-    if use_vlm:
-        vlm_engine = LLaMAVLMEngine(model_id=vlm_model_id)
-    statuses["vlm"] = {
-        "enabled": use_vlm,
-        "available": None if vlm_engine is None else vlm_engine.available,
-        "error": None if vlm_engine is None else vlm_engine.error,
-        "model_id": vlm_model_id if use_vlm else None,
-    }
-    qwen_engine = None
-    if use_qwen_qa:
-        qwen_engine = QwenKnowledgeEngine(model_id=qwen_model_id)
-    statuses["qwen_qa"] = {
-        "enabled": use_qwen_qa,
-        "available": None if qwen_engine is None else qwen_engine.available,
-        "error": None if qwen_engine is None else qwen_engine.error,
-        "model_id": qwen_model_id if use_qwen_qa else None,
-    }
-
-    prescreener = None if skip_prescreen else YOLOWorldLogoPrescreener(conf_threshold=prescreen_threshold)
-    statuses["yolo_prescreen"] = {
-        "enabled": not skip_prescreen,
-        "available": None if prescreener is None else prescreener.available,
-        "error": "disabled" if prescreener is None else prescreener.error,
-        "threshold": prescreen_threshold,
-    }
+    for name, enabled, factory, extras in registry:
+        backend = factory() if enabled else None
+        statuses[name] = {
+            "enabled": enabled,
+            "available": None if backend is None else backend.available,
+            "error": ("disabled" if backend is None else backend.error),
+            **extras,
+        }
 
     if with_sam3:
         try:

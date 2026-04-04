@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from .record_types import BrandRow, ImageRow, LogoInstanceRow
+
 
 class EngineDB:
     def __init__(self, path: str | Path) -> None:
@@ -153,7 +155,7 @@ class EngineDB:
     def _execute_many(self, query: str, rows: Iterable[Dict[str, Any]]) -> None:
         self.conn.executemany(query, list(rows))
 
-    def upsert_brand_records(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
+    def upsert_brand_records(self, rows: Iterable[BrandRow], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -183,7 +185,7 @@ class EngineDB:
             self.conn.commit()
         return len(rows)
 
-    def upsert_image_records(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
+    def upsert_image_records(self, rows: Iterable[ImageRow], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -228,7 +230,7 @@ class EngineDB:
             self.conn.commit()
         return len(rows)
 
-    def upsert_logo_instances(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
+    def upsert_logo_instances(self, rows: Iterable[LogoInstanceRow], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0

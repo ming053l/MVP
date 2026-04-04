@@ -66,3 +66,71 @@ class DetectionPayload(TypedDict, total=False):
     prompt_context: Dict[str, Any]
     prompt_variants: List[str]
     ocr: OCRPayload
+
+
+class BrandRow(TypedDict):
+    brand_id: str
+    canonical_name: str
+    display_name: str
+    tier: str
+    industry: str | None
+    country: str | None
+    parent_company: str | None
+    knowledge_json: str
+    created_at: str
+    updated_at: str
+
+
+class ImageRow(TypedDict):
+    image_id: str
+    external_key: str
+    brand_hint: str | None
+    category: str | None
+    source_name: str | None
+    source_channel: str | None
+    source_kind: str | None
+    scene_bucket: str
+    image_url: str | None
+    local_image_path: str | None
+    image_phash: str | None
+    quality_status: str | None
+    quality_score: float | None
+    quality_gate_json: str | None
+    difficulty_flags_json: str | None
+    last_gated_at: str | None
+    tier: str
+    capture_context_json: str
+    raw_json: str
+    created_at: str
+    updated_at: str
+
+
+class LogoInstanceRow(TypedDict):
+    instance_id: str
+    image_id: str
+    brand_id: str | None
+    merged_brand_name: str | None
+    detector_name: str | None
+    ocr_engine: str | None
+    clip_engine: str | None
+    bbox_json: str | None
+    polygon_json: str | None
+    rotated_box_json: str | None
+    mask_path: str | None
+    detector_score: float | None
+    ocr_text: str | None
+    ocr_confidence: float | None
+    clip_score: float | None
+    caption_text: str | None
+    caption_model: str | None
+    attribution_json: str | None
+    knowledge_json: str | None
+    risk_json: str | None
+    confidence: float | None
+    ambiguity_note: str | None
+    review_status: str | None
+    tier: str
+    provenance_json: str
+    raw_json: str
+    created_at: str
+    updated_at: str

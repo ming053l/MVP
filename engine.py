@@ -8,7 +8,7 @@ from .annotations import imported_logo_instances, merge_signals
 from .db import EngineDB
 from .dedupe import compute_phash
 from .qwen_reasoning import build_qwen_prompt_payload, run_qwen_logo_reasoning
-from .record_types import BrandCatalogEntry, BrandKnowledgeRecord, ProductRecord
+from .record_types import BrandCatalogEntry, BrandKnowledgeRecord, BrandRow, ImageRow, LogoInstanceRow, ProductRecord
 from .schema import (
     canonical_brand_id,
     image_external_key,
@@ -37,9 +37,9 @@ def load_run_payloads(run_dir: str | Path) -> Dict[str, List[Dict[str, Any]]]:
     }
 
 
-def brand_rows_from_records(brand_records: Iterable[BrandKnowledgeRecord], tier: str) -> List[Dict[str, Any]]:
+def brand_rows_from_records(brand_records: Iterable[BrandKnowledgeRecord], tier: str) -> List[BrandRow]:
     now = utcnow_iso()
-    rows = []
+    rows: List[BrandRow] = []
     for record in brand_records:
         if not record.get("matched"):
             continue
@@ -74,7 +74,7 @@ def ingest_image_records(
     existing_phashes = db.existing_phashes()
     existing_keys = db.existing_external_keys()
     batch_phashes: set[str] = set()
-    rows = []
+    rows: List[ImageRow] = []
     stats = {"seen": 0, "inserted": 0, "skipped_existing": 0, "skipped_duplicate": 0, "phash_failures": 0}
 
     for record in records:
@@ -132,7 +132,7 @@ def ingest_image_records(
 
 def annotate_from_segment_records(
     db: EngineDB,
-    segment_records: Iterable[Dict[str, Any]],
+    segment_records: Iterable[ProductRecord],
     tier: str,
     dry_run: bool = False,
     resume: bool = False,
@@ -177,7 +177,7 @@ def annotate_from_segment_records(
         vlm_engine = LLaMAVLMEngine(model_id=vlm_model_id) if use_vlm else None
         qwen_engine = QwenKnowledgeEngine(model_id=qwen_model_id) if use_qwen_qa else None
         catalog = brand_catalog or []
-        rows = []
+        rows: List[LogoInstanceRow] = []
         timestamp = utcnow_iso()
 
         for record in segment_records:
