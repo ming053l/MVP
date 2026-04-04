@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <title>Logo Data Engine 使用說明與資料流規格</title>
+    <style>
+      @page {
+        margin: 2.2cm;
+      }
+      body {
+        font-family: "Liberation Serif", "Times New Roman", serif;
+        font-size: 11pt;
+        line-height: 1.5;
+        color: #111;
+      }
+      h1 {
+        font-size: 16pt;
+        margin: 0 0 10px 0;
+      }
+      h2 {
+        font-size: 13.5pt;
+        margin: 20px 0 6px 0;
+      }
+      h3 {
+        font-size: 12pt;
+        margin: 16px 0 4px 0;
+      }
+      h4 {
+        font-size: 11pt;
+        margin: 12px 0 4px 0;
+      }
+      p {
+        margin: 4px 0 8px 0;
+      }
+      ul {
+        margin: 4px 0 8px 18px;
+        padding: 0;
+      }
+      li {
+        margin: 4px 0;
+      }
+      code {
+        font-family: "Liberation Mono", "Courier New", monospace;
+        font-size: 10.5pt;
+        background: #f6f6f6;
+        padding: 2px 4px;
+        border-radius: 3px;
+      }
+      pre {
+        font-family: "Liberation Mono", "Courier New", monospace;
+        font-size: 10.5pt;
+        background: #f6f6f6;
+        padding: 8px 10px;
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 6px 0 12px 0;
+        font-size: 10.5pt;
+      }
+      th, td {
+        border: 1px solid #777;
+        padding: 6px 6px;
+        vertical-align: top;
+      }
+      th {
+        background: #f0f0f0;
+        font-weight: bold;
+      }
+      .mono {
+        font-family: "Liberation Mono", "Courier New", monospace;
+      }
+      .small {
+        font-size: 10pt;
+      }
+      .section-title {
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Logo Data Engine 使用說明與資料流規格（LaTeX 風格版）</h1>
+    <p class="small">版本：v1.1（對應 /raid/ming/logo/logo_data_engine）</p>
+
+    <h2>1. 系統概述</h2>
+    <p>
+      本系統為一個可重跑、可擴充、可審核的 Logo 資料引擎。核心原則為：
+      所有資料都進入同一 schema（ImageRecord → LogoInstance → BrandRecord），
+      並以 <code>tier</code> 作為唯一狀態機。
+    </p>
+    <p>
+      Pipeline 預設包含：Collector、Ontology、Ingest、Quality Gate、Segmentation（SAM3）、
+      Annotation（OCR/CLIP/Caption/VLM）、Review、Export。
+    </p>
+
+    <h2>2. 環境與啟動</h2>
+    <h3>2.1 安裝與更新</h3>
+    <pre>cd /raid/ming/logo
+./logo_data_engine/setup_env.sh logo_sam3</pre>
+    <p>此腳本會：</p>
+    <ul>
+      <li>建立 conda 環境（Python 3.12）</li>
+      <li>安裝依賴、Torch、PaddleOCR、Ultralytics、HuggingFace 模型</li>
+      <li>下載或更新 SAM3 至 <code>/raid/ming/logo/logo_data_engine/sam3</code></li>
+    </ul>
+
+    <h3>2.2 快速執行（多品牌 batch）</h3>
+    <pre>./logo_data_engine/run_multibrand_batch.sh \
+  --run-name batch_10 \
+  --target-records 10 \
+  --with-sam3 \
+  --use-vlm \
+  --vlm-model-id llava-hf/llava-1.5-7b-hf</pre>
+
+    <h3>2.3 GPU 指定</h3>
+    <pre>./logo_data_engine/run_multibrand_batch.sh \
+  --run-name batch_10 \
+  --target-records 10 \
+  --with-sam3 \
+  --cuda-devices 1,2,3</pre>
+
+    <h2>3. Pipeline 預設流程與觸發</h2>
+    <p>每次執行會先跑 <code>preflight</code>，輸出：</p>
+    <pre>results/&lt;run_name&gt;/meta/preflight.json</pre>
+    <p>內容包含所有模型的可用性與錯誤訊息。</p>
+
+    <h2>4. 資料輸出流（非常詳實）</h2>
+    <p class="section-title">4.1 流程順序與輸入/輸出</p>
+    <table>
+      <thead>
+        <tr>
+          <th>步驟</th>
+          <th>輸入</th>
+          <th>輸出</th>
+          <th>說明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Collector</td>
+          <td>品牌/類別/來源設定</td>
+          <td>meta/raw_records.json<br/>fetch/images/</td>
+          <td>取得原始樣本與下載圖像</td>
+        </tr>
+        <tr>
+          <td>Balance (candidate)</td>
+          <td>raw_records.json</td>
+          <td>candidate_records.json</td>
+          <td>候選池平衡抽樣</td>
+        </tr>
+        <tr>
+          <td>Ontology Fetch</td>
+          <td>candidate_records.json</td>
+          <td>brand/brand_records.json</td>
+          <td>抓取品牌知識與 alias</td>
+        </tr>
+        <tr>
+          <td>Seed Ontology</td>
+          <td>brand_records.json</td>
+          <td>DB.brand_records</td>
+          <td>寫入 brand tier= silver</td>
+        </tr>
+        <tr>
+          <td>Ingest</td>
+          <td>candidate_records.json</td>
+          <td>DB.image_records</td>
+          <td>寫入影像表 + pHash 去重</td>
+        </tr>
+        <tr>
+          <td>Quality Gate</td>
+          <td>DB.image_records</td>
+          <td>meta/passed_records.json<br/>quality_status</td>
+          <td>五關過濾 + 狀態標記</td>
+        </tr>
+        <tr>
+          <td>Balance (final)</td>
+          <td>passed_records.json</td>
+          <td>fetch/records.json</td>
+          <td>達成目標筆數</td>
+        </tr>
+        <tr>
+          <td>SAM3 Segmentation</td>
+          <td>fetch/records.json<br/>brand_records.json</td>
+          <td>segment/records_with_logo_masks.json<br/>segment/masks<br/>segment/visualizations</td>
+          <td>object-first + SAM3 mask</td>
+        </tr>
+        <tr>
+          <td>Phase1 Annotate</td>
+          <td>fetch/records.json<br/>brand_records.json<br/>segment records (optional)</td>
+          <td>DB.logo_instances<br/>review/review_queue.json</td>
+          <td>OCR/CLIP/Caption/VLM merge</td>
+        </tr>
+        <tr>
+          <td>Export</td>
+          <td>DB tables</td>
+          <td>export/knowledge_base.json<br/>analysis/analysis.md<br/>analysis/summary.json</td>
+          <td>KnowledgeBase + 分析報告</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>5. Quality Gate 詳細評分邏輯</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Gate</th>
+          <th>條件 / 計算</th>
+          <th>閾值</th>
+          <th>失敗原因</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Gate 1</td>
+          <td>尺寸檢查：min_width, min_height</td>
+          <td>≥ 256</td>
+          <td>too_small</td>
+        </tr>
+        <tr>
+          <td>Gate 2</td>
+          <td>模糊度：Laplacian variance</td>
+          <td>≥ 45.0</td>
+          <td>too_blurry</td>
+        </tr>
+        <tr>
+          <td>Gate 3</td>
+          <td>pHash distance</td>
+          <td>≤ 6</td>
+          <td>duplicate</td>
+        </tr>
+        <tr>
+          <td>Gate 4</td>
+          <td>CLIP Logo score</td>
+          <td>hard ≥ 0.22<br/>soft ≥ 0.08</td>
+          <td>low_clip_logo_score</td>
+        </tr>
+        <tr>
+          <td>Gate 5</td>
+          <td>YOLO Prescreen<br/>labels: logo/brand logo/company logo</td>
+          <td>conf ≥ 0.30</td>
+          <td>no_logo_prescreen_detection</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>6. 模型 Prompts 與輸出樣例（詳細）</h2>
+
+    <h3>6.1 GroundingDINO（Logo bbox）</h3>
+    <p class="section-title">Prompt 來源（由 <code>build_prompts</code> 組合）：</p>
+    <ul>
+      <li>品牌詞：<code>{brand} logo</code>, <code>{brand} brand logo</code>, <code>{brand} emblem</code></li>
+      <li>Alias：<code>{alias} logo</code></li>
+      <li>物件結合：<code>{brand} logo on {object}</code>, <code>{object} logo</code></li>
+      <li>歷史語境：<code>vintage {brand} logo</code>, <code>retro {brand} logo</code></li>
+    </ul>
+    <p class="section-title">範例 Prompt 列表：</p>
+    <pre>nike logo
+nike brand logo
+nike emblem
+shoe logo
+nike logo on shoe
+vintage nike logo</pre>
+    <p class="section-title">輸出樣例（節錄）：</p>
+    <pre>{
+  "grounding_bbox_xyxy": [112.3, 76.1, 188.4, 132.7],
+  "grounding_score": 0.71,
+  "grounding_label": "nike logo"
+}</pre>
+
+    <h3>6.2 GroundingDINO（Object-first 物件框）</h3>
+    <p class="section-title">Prompt 來源（依 category 與 object_terms）：</p>
+    <ul>
+      <li>shoes：<code>shoe</code>, <code>sneaker</code>, <code>footwear</code></li>
+      <li>apparel：<code>shirt</code>, <code>hoodie</code>, <code>apparel</code></li>
+      <li>smartphones：<code>phone back</code>, <code>mobile phone</code></li>
+      <li>通用：<code>product</code>, <code>object</code>, <code>item</code></li>
+    </ul>
+    <p class="section-title">輸出樣例：</p>
+    <pre>{
+  "object_grounding_bbox_xyxy": [18.5, 44.2, 502.9, 363.7],
+  "object_grounding_label": "sneaker",
+  "object_grounding_score": 0.83
+}</pre>
+
+    <h3>6.3 SAM3 Segmentation</h3>
+    <p class="section-title">輸出欄位：</p>
+    <ul>
+      <li><code>logo_bbox_xyxy</code>, <code>logo_mask_path</code></li>
+      <li><code>logo_mask_area_pixels</code>, <code>logo_mask_area_fraction</code></li>
+      <li><code>logo_segmentation_status</code></li>
+    </ul>
+    <p class="section-title">輸出樣例：</p>
+    <pre>{
+  "logo_bbox_xyxy": [120.0, 78.2, 182.4, 124.9],
+  "logo_mask_path": ".../segment/masks/record_001.png",
+  "logo_mask_area_pixels": 2412,
+  "logo_mask_area_fraction": 0.0032
+}</pre>
+
+    <h3>6.4 PaddleOCR</h3>
+    <p class="section-title">輸出樣例：</p>
+    <pre>{
+  "ocr_text": "NIKE",
+  "ocr_confidence": 0.92,
+  "ocr_lines": [
+    {"text": "NIKE", "score": 0.92, "polygon": [[10,10],[80,10],[80,30],[10,30]]}
+  ]
+}</pre>
+
+    <h3>6.5 CLIP Logo Gate</h3>
+    <p class="section-title">Prompt：</p>
+    <ul>
+      <li><code>a photo with a brand logo</code></li>
+    </ul>
+    <p class="section-title">輸出樣例（quality_gate_json 內）：</p>
+    <pre>{
+  "clip_logo": {
+    "score": 0.27,
+    "threshold": 0.22,
+    "soft_floor": 0.08,
+    "decision": "passed"
+  }
+}</pre>
+
+    <h3>6.6 CLIP Brand Retrieval</h3>
+    <p class="section-title">輸出樣例：</p>
+    <pre>{
+  "clip_score": 0.86,
+  "top_matches": [
+    {"brand": "nike", "score": 0.86},
+    {"brand": "adidas", "score": 0.63},
+    {"brand": "new balance", "score": 0.57}
+  ]
+}</pre>
+
+    <h3>6.7 BLIP Caption</h3>
+    <p class="section-title">Prompt：</p>
+    <ul>
+      <li><code>Describe the brand, object, and photo scene.</code></li>
+      <li><code>Describe the logo, brand, and object in this crop.</code></li>
+    </ul>
+    <p class="section-title">輸出樣例：</p>
+    <pre>{
+  "full_image_caption": "A person holding a red Coca-Cola can.",
+  "logo_crop_caption": "The Coca-Cola logo on a soda can."
+}</pre>
+
+    <h3>6.8 VLM (LLaVA)</h3>
+    <p class="section-title">Prompt：</p>
+    <ul>
+      <li><code>Describe the brand, object, and photo scene.</code></li>
+      <li><code>Describe the logo, brand, and object in this crop.</code></li>
+    </ul>
+    <p class="section-title">輸出樣例：</p>
+    <pre>{
+  "full_image_caption": "A Nike sneaker displayed on a table.",
+  "logo_crop_caption": "A white Nike swoosh on the shoe."
+}</pre>
+
+    <h2>7. Quality Filter 決策規則（更細）</h2>
+    <p>每張圖依序過五關，任一關失敗即標記 <code>quality_status=filtered</code>。</p>
+    <ul>
+      <li>若來源可信且 CLIP score ≥ soft floor，會進入 soft pass（仍保留失敗原因）。</li>
+      <li>pHash 去重優先於昂貴模型，避免重複算力浪費。</li>
+      <li>寫回欄位：<code>quality_status</code>, <code>quality_score</code>, <code>quality_gate_json</code></li>
+    </ul>
+
+    <h2>8. SAM3 Two-Stage 流程</h2>
+    <p>預設 object-first：</p>
+    <ol>
+      <li>GroundingDINO object prompts → 物件 bbox</li>
+      <li>對每個物件 crop → GroundingDINO logo prompts</li>
+      <li>使用 logo bbox + SAM3 → mask</li>
+    </ol>
+    <p>輸出欄位（segment records）：</p>
+    <ul>
+      <li><code>object_grounding_bbox_xyxy</code></li>
+      <li><code>object_grounding_label</code></li>
+      <li><code>logo_grounding_bbox_xyxy</code></li>
+      <li><code>logo_mask_path</code></li>
+    </ul>
+
+    <h2>9. OCR / VLM / BLIP / Qwen 輸出位置</h2>
+    <p>
+      所有 OCR、Caption、Qwen 推理與 Attribution 結果都會寫入：
+      <code>DB.logo_instances</code>，並輸出到
+      <code>export/knowledge_base.json</code>。
+    </p>
+    <p>主要欄位：</p>
+    <ul>
+      <li><code>ocr_text</code>, <code>ocr_confidence</code></li>
+      <li><code>caption_text</code>, <code>caption_model</code></li>
+      <li><code>attribution_json</code>（包含 clip_retrieval / captioning / qwen_knowledge / merged）</li>
+      <li><code>knowledge_json</code>（Qwen 多段式知識推理）</li>
+      <li><code>risk_json</code>（Qwen 風險判斷）</li>
+    </ul>
+    <p>完整原始 payload：<code>logo_instances.provenance_json</code></p>
+    <p>
+      注意：<code>clip_retrieval</code> 現在預設只保留為診斷訊號，
+      不再直接主導最終品牌合併；最終品牌主要由 trusted metadata、OCR、caption / VLM 與 fallback similarity 決定。
+    </p>
+
+    <h3>9.1 Qwen 多段式推理</h3>
+    <p>Qwen 不再一次問完整大題，而是拆成五段各自輸出 JSON：</p>
+    <ol>
+      <li><code>grounding</code></li>
+      <li><code>recognition</code></li>
+      <li><code>world_knowledge</code></li>
+      <li><code>risk</code></li>
+      <li><code>ambiguity</code></li>
+    </ol>
+    <p>好處是某一段失敗時，不會讓整個 knowledge/risk 全部變成 null。</p>
+    <p>最終寫回：</p>
+    <ul>
+      <li><code>logo_instances.knowledge_json</code></li>
+      <li><code>logo_instances.risk_json</code></li>
+      <li><code>logo_instances.attribution_json.qwen_validation</code></li>
+    </ul>
+
+    <h2>10. 輸出資料夾結構</h2>
+    <pre>results/&lt;run_name&gt;/
+  meta/              # preflight/raw/candidate/passed
+  fetch/             # records.json + images
+  brand/             # brand_records.json
+  segment/           # SAM3 outputs
+  review/            # review_queue.json
+  export/            # knowledge_base.json
+  analysis/          # analysis.md + summary.json
+  engine/            # main sqlite db
+  staging/           # batch staging sqlite db</pre>
+
+    <h2>11. Knowledge Base 內容與結構（更詳細）</h2>
+    <p>輸出檔：<code>export/knowledge_base.json</code></p>
+    <p>結構為「每張影像一筆」，內含 logo_instances 與 brand_record：</p>
+    <pre>{
+  "image_id": "...",
+  "engine_quality_status": "passed",
+  "engine_quality_gate": {...},
+  "engine_brand_record": {...},
+  "logo_instances": [
+    {"instance_id": "...", "bbox": [...], "attribution": {...}, "brand_record": {...}}
+  ]
+}</pre>
+    <p>內容結構：</p>
+    <ul>
+      <li><b>ImageRecord</b>：影像與來源資訊</li>
+      <li><b>LogoInstance</b>：bbox / mask / OCR / attribution 結果</li>
+      <li><b>BrandRecord</b>：品牌知識（industry / country / aliases）</li>
+    </ul>
+    <p>核心欄位：</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Entity</th>
+          <th>核心欄位</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>ImageRecord</td>
+          <td>image_id, image_url, local_image_path, source, source_channel, quality_status</td>
+        </tr>
+        <tr>
+          <td>LogoInstance</td>
+          <td>bbox_json, mask_path, ocr_text, clip_score, caption_text, attribution_json, knowledge_json, risk_json, tier</td>
+        </tr>
+        <tr>
+          <td>BrandRecord</td>
+          <td>brand_id, display_name, industry, country, aliases_en, tier</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>12. Schema 詳表</h2>
+    <h3>12.1 ImageRecord</h3>
+    <table>
+      <thead><tr><th>欄位</th><th>型別</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>image_id</td><td>TEXT</td><td>影像主鍵</td></tr>
+        <tr><td>external_key</td><td>TEXT</td><td>來源唯一 key</td></tr>
+        <tr><td>brand_hint</td><td>TEXT</td><td>品牌提示</td></tr>
+        <tr><td>category</td><td>TEXT</td><td>品類</td></tr>
+        <tr><td>source_name</td><td>TEXT</td><td>來源名稱</td></tr>
+        <tr><td>source_channel</td><td>TEXT</td><td>來源渠道</td></tr>
+        <tr><td>source_kind</td><td>TEXT</td><td>來源型態</td></tr>
+        <tr><td>scene_bucket</td><td>TEXT</td><td>場景桶</td></tr>
+        <tr><td>image_url</td><td>TEXT</td><td>原始 URL</td></tr>
+        <tr><td>local_image_path</td><td>TEXT</td><td>本地路徑</td></tr>
+        <tr><td>image_phash</td><td>TEXT</td><td>pHash</td></tr>
+        <tr><td>quality_status</td><td>TEXT</td><td>passed/filtered/pending</td></tr>
+        <tr><td>quality_score</td><td>REAL</td><td>綜合分數</td></tr>
+        <tr><td>quality_gate_json</td><td>TEXT(JSON)</td><td>各 gate 詳細結果</td></tr>
+        <tr><td>difficulty_flags_json</td><td>TEXT(JSON)</td><td>難例標籤</td></tr>
+        <tr><td>tier</td><td>TEXT</td><td>proposal/silver/gold</td></tr>
+      </tbody>
+    </table>
+
+    <h3>12.2 LogoInstance</h3>
+    <table>
+      <thead><tr><th>欄位</th><th>型別</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>instance_id</td><td>TEXT</td><td>logo instance 主鍵</td></tr>
+        <tr><td>image_id</td><td>TEXT</td><td>對應 image_id</td></tr>
+        <tr><td>brand_id</td><td>TEXT</td><td>推斷品牌</td></tr>
+        <tr><td>bbox_json</td><td>TEXT(JSON)</td><td>logo bbox</td></tr>
+        <tr><td>mask_path</td><td>TEXT</td><td>SAM3 mask 路徑</td></tr>
+        <tr><td>ocr_text</td><td>TEXT</td><td>OCR 文本</td></tr>
+        <tr><td>clip_score</td><td>REAL</td><td>CLIP brand 相似度</td></tr>
+        <tr><td>caption_text</td><td>TEXT</td><td>caption</td></tr>
+        <tr><td>caption_model</td><td>TEXT</td><td>caption model id</td></tr>
+        <tr><td>attribution_json</td><td>TEXT(JSON)</td><td>clip/caption/qwen/merged 詳細</td></tr>
+        <tr><td>knowledge_json</td><td>TEXT(JSON)</td><td>Qwen grounding/recognition/world knowledge/ambiguity</td></tr>
+        <tr><td>risk_json</td><td>TEXT(JSON)</td><td>Qwen risk reasoning</td></tr>
+        <tr><td>confidence</td><td>REAL</td><td>最終信心</td></tr>
+        <tr><td>review_status</td><td>TEXT</td><td>auto_accept/needs_review</td></tr>
+        <tr><td>tier</td><td>TEXT</td><td>proposal/silver/gold</td></tr>
+      </tbody>
+    </table>
+
+    <h3>12.3 BrandRecord</h3>
+    <table>
+      <thead><tr><th>欄位</th><th>型別</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>brand_id</td><td>TEXT</td><td>品牌主鍵</td></tr>
+        <tr><td>display_name</td><td>TEXT</td><td>品牌顯示名稱</td></tr>
+        <tr><td>industry</td><td>TEXT</td><td>產業</td></tr>
+        <tr><td>country</td><td>TEXT</td><td>國家</td></tr>
+        <tr><td>parent_company</td><td>TEXT</td><td>母公司</td></tr>
+        <tr><td>knowledge_json</td><td>TEXT(JSON)</td><td>品牌知識資料</td></tr>
+        <tr><td>tier</td><td>TEXT</td><td>silver/gold</td></tr>
+      </tbody>
+    </table>
+
+    <h2>13. JSON 實例樣本</h2>
+    <h3>13.1 raw_records.json（節錄）</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "brand": "Nike",
+    "category": "shoes",
+    "image_url": "https://...",
+    "source_name": "ad_site",
+    "source_channel": "advertising",
+    "source_kind": "marketplace"
+  }
+]</pre>
+
+    <h3>13.2 segment/records_with_logo_masks.json（節錄）</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "logo_segmentation_status": "ok",
+    "object_grounding_bbox_xyxy": [18,44,503,364],
+    "logo_grounding_bbox_xyxy": [120,78,182,125],
+    "logo_mask_path": ".../segment/masks/nike_shoes_0001.png"
+  }
+]</pre>
+
+    <h3>13.3 review/review_queue.json（節錄）</h3>
+    <pre>[
+  {
+    "instance_id": "img_001__logo_1",
+    "review_status": "needs_review",
+    "tier": "proposal",
+    "ocr_text": "NIKE",
+    "clip_score": 0.86
+  }
+]</pre>
+
+    <h3>13.4 export/knowledge_base.json（節錄）</h3>
+    <pre>[
+  {
+    "image_id": "img_001",
+    "engine_quality_status": "passed",
+    "logo_instances": [
+      {
+        "instance_id": "img_001__logo_1",
+        "bbox": [120,78,182,125],
+        "ocr_text": "NIKE",
+        "clip_score": 0.86,
+        "caption_text": "A Nike sneaker on a table."
+      }
+    ]
+  }
+]</pre>
+
+    <h2>14. 完整 Schema 欄位對應說明</h2>
+    <p>以下說明 DB 欄位與輸出 JSON 的對應關係，便於確認每個欄位在 export 中的位置。</p>
+
+    <h3>14.1 image_records → export/knowledge_base.json</h3>
+    <table>
+      <thead><tr><th>DB 欄位</th><th>輸出 JSON 欄位</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>image_id</td><td>image_id</td><td>影像主鍵</td></tr>
+        <tr><td>tier</td><td>engine_tier</td><td>影像 tier</td></tr>
+        <tr><td>quality_status</td><td>engine_quality_status</td><td>品質狀態</td></tr>
+        <tr><td>quality_score</td><td>engine_quality_score</td><td>品質分數</td></tr>
+        <tr><td>quality_gate_json</td><td>engine_quality_gate</td><td>各 gate 詳細</td></tr>
+        <tr><td>difficulty_flags_json</td><td>difficulty_flags</td><td>難例標記</td></tr>
+        <tr><td>brand_hint</td><td>engine_brand_record</td><td>對應品牌 record</td></tr>
+        <tr><td>raw_json</td><td>原始 record 欄位</td><td>展開到最外層</td></tr>
+      </tbody>
+    </table>
+
+    <h2>14.4 全 JSON 欄位逐欄說明（含型別/必填/驗證）</h2>
+    <p>以下列出 export/knowledge_base.json 中每筆影像 record 的所有欄位說明。</p>
+    <table>
+      <thead><tr><th>JSON 欄位</th><th>型別</th><th>必填</th><th>驗證邏輯</th><th>來源/說明</th></tr></thead>
+      <tbody>
+        <tr><td>record_id</td><td>string</td><td>yes</td><td>非空、唯一</td><td>collector 產生的 record id</td></tr>
+        <tr><td>brand</td><td>string</td><td>yes</td><td>非空字串</td><td>品牌文字</td></tr>
+        <tr><td>category</td><td>string</td><td>yes</td><td>允許值集合</td><td>品類</td></tr>
+        <tr><td>image_url</td><td>string</td><td>yes</td><td>URL 格式</td><td>圖片 URL</td></tr>
+        <tr><td>source_name</td><td>string</td><td>yes</td><td>非空</td><td>來源名稱</td></tr>
+        <tr><td>source_channel</td><td>string</td><td>yes</td><td>允許值集合</td><td>來源渠道</td></tr>
+        <tr><td>source_kind</td><td>string</td><td>yes</td><td>允許值集合</td><td>來源型態</td></tr>
+        <tr><td>capture_context</td><td>object</td><td>no</td><td>JSON 物件</td><td>拍攝上下文（國家/年份等）</td></tr>
+        <tr><td>image_id</td><td>string</td><td>yes</td><td>非空、唯一</td><td>影像主鍵</td></tr>
+        <tr><td>engine_tier</td><td>string</td><td>yes</td><td>proposal/silver/gold</td><td>影像 tier</td></tr>
+        <tr><td>engine_quality_status</td><td>string</td><td>yes</td><td>passed/filtered/pending</td><td>品質狀態</td></tr>
+        <tr><td>engine_quality_score</td><td>number</td><td>no</td><td>0~1</td><td>品質分數</td></tr>
+        <tr><td>engine_quality_gate</td><td>object</td><td>no</td><td>各 gate 子欄位完整</td><td>各 gate 詳細 JSON</td></tr>
+        <tr><td>difficulty_flags</td><td>array</td><td>no</td><td>string[]</td><td>難例標記</td></tr>
+        <tr><td>engine_brand_record</td><td>object</td><td>no</td><td>brand_record schema</td><td>對應 brand record</td></tr>
+        <tr><td>logo_instances</td><td>array</td><td>yes</td><td>LogoInstance[]</td><td>所有 logo instance 列表</td></tr>
+      </tbody>
+    </table>
+
+    <p>logo_instances[] 欄位完整說明（含型別/必填/驗證）：</p>
+    <table>
+      <thead><tr><th>欄位</th><th>型別</th><th>必填</th><th>驗證邏輯</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>instance_id</td><td>string</td><td>yes</td><td>非空、唯一</td><td>logo instance 主鍵</td></tr>
+        <tr><td>brand_id</td><td>string</td><td>no</td><td>需存在於 brand_records</td><td>推斷品牌</td></tr>
+        <tr><td>merged_brand_name</td><td>string</td><td>no</td><td>非空</td><td>合併後品牌名稱</td></tr>
+        <tr><td>detector_name</td><td>string</td><td>no</td><td>非空</td><td>使用的 detector</td></tr>
+        <tr><td>bbox</td><td>array</td><td>yes</td><td>長度=4</td><td>logo bbox</td></tr>
+        <tr><td>mask_path</td><td>string</td><td>no</td><td>路徑格式</td><td>SAM3 mask 路徑</td></tr>
+        <tr><td>ocr_text</td><td>string</td><td>no</td><td>可為空</td><td>OCR 文本</td></tr>
+        <tr><td>ocr_confidence</td><td>number</td><td>no</td><td>0~1</td><td>OCR 信心</td></tr>
+        <tr><td>clip_score</td><td>number</td><td>no</td><td>0~1</td><td>CLIP 相似度</td></tr>
+        <tr><td>caption_text</td><td>string</td><td>no</td><td>可為空</td><td>caption 結果</td></tr>
+        <tr><td>caption_model</td><td>string</td><td>no</td><td>非空</td><td>caption 模型</td></tr>
+        <tr><td>attribution</td><td>object</td><td>no</td><td>必含 source/merged</td><td>完整 attribution JSON</td></tr>
+        <tr><td>confidence</td><td>number</td><td>no</td><td>0~1</td><td>最終信心</td></tr>
+        <tr><td>review_status</td><td>string</td><td>no</td><td>auto_accept/needs_review</td><td>人工審核狀態</td></tr>
+        <tr><td>tier</td><td>string</td><td>yes</td><td>proposal/silver/gold</td><td>資料 tier</td></tr>
+        <tr><td>provenance</td><td>object</td><td>no</td><td>JSON object</td><td>詳細來源與 payload</td></tr>
+        <tr><td>brand_record</td><td>object</td><td>no</td><td>brand_record schema</td><td>對應品牌 record</td></tr>
+      </tbody>
+    </table>
+
+    <h2>14.5 欄位驗證實作規則（正規化/允許值/檢查邏輯）</h2>
+    <h3>14.5.1 正規化邏輯</h3>
+    <ul>
+      <li><b>brand_id</b>：使用 <code>slugify</code>（小寫 + 非英數替換成 <code>-</code>）</li>
+      <li><b>source_channel/source_kind/category</b>：<code>strip().lower()</code></li>
+      <li><b>scene_bucket</b>：優先 <code>capture_context.scene_type</code>，否則 <code>source_channel</code>，再否則 <code>category</code></li>
+      <li><b>image_id</b>：<code>stable_hash(external_key, brand, category)</code></li>
+      <li><b>instance_id</b>：<code>stable_hash(image_id, proposal)</code></li>
+    </ul>
+
+    <h3>14.5.2 允許值列表（目前 pipeline 使用）</h3>
+    <table>
+      <thead><tr><th>欄位</th><th>允許值/建議值</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>tier</td><td>proposal / silver / gold</td><td>固定三態</td></tr>
+        <tr><td>review_status</td><td>auto_accept / needs_review</td><td>目前 pipeline 使用</td></tr>
+        <tr><td>quality_status</td><td>passed / filtered / pending / error</td><td>quality gate 輸出</td></tr>
+        <tr><td>category</td><td>shoes / apparel / mugs / cans / smartphones</td><td>內建 prompts 支援</td></tr>
+        <tr><td>source_kind</td><td>official / marketplace / other</td><td>trusted catalog 判斷</td></tr>
+        <tr><td>source_channel</td><td>ecommerce / marketplace / advertising / editorial / social / sports_broadcast / user_capture</td><td>非硬性限制，主要用於 scene_bucket</td></tr>
+      </tbody>
+    </table>
+
+    <h3>14.5.3 Gate 驗證邏輯（實作細節）</h3>
+    <ul>
+      <li><b>尺寸</b>：width &gt;= 256、height &gt;= 256</li>
+      <li><b>格式</b>：JPEG/PNG/WEBP/JPG</li>
+      <li><b>模糊</b>：Laplacian variance &gt;= 45.0</li>
+      <li><b>pHash</b>：distance &lt;= 6</li>
+      <li><b>CLIP logo score</b>：score &gt;= 0.22；trusted catalog 可 soft pass (0.08)</li>
+      <li><b>YOLO prescreen</b>：至少一個 bbox conf &gt;= 0.3</li>
+    </ul>
+
+    <h3>14.5.4 BBox / Mask 基本驗證</h3>
+    <ul>
+      <li><b>bbox</b>：長度=4 且 x0 &lt; x1, y0 &lt; y1</li>
+      <li><b>mask_area_fraction</b>：0 ~ 1</li>
+    </ul>
+
+    <h3>14.5.5 正規化範例與合法/非法例子</h3>
+    <table>
+      <thead><tr><th>欄位</th><th>正規化規則</th><th>合法例子</th><th>非法例子</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>brand_id</td>
+          <td>slugify（小寫+非英數轉 -）</td>
+          <td>输入: "New Balance" → <code>new-balance</code></td>
+          <td>空字串 → <code>unknown</code></td>
+        </tr>
+        <tr>
+          <td>source_channel</td>
+          <td>strip + lower</td>
+          <td>"Advertising " → <code>advertising</code></td>
+          <td>null/空字串</td>
+        </tr>
+        <tr>
+          <td>source_kind</td>
+          <td>strip + lower</td>
+          <td>"Marketplace" → <code>marketplace</code></td>
+          <td>非允許值（如 "foo")</td>
+        </tr>
+        <tr>
+          <td>category</td>
+          <td>strip + lower</td>
+          <td>"Shoes" → <code>shoes</code></td>
+          <td>不在清單（如 "car")</td>
+        </tr>
+        <tr>
+          <td>scene_bucket</td>
+          <td>scene_type &gt; source_channel &gt; category</td>
+          <td>scene_type="stadium" → <code>stadium</code></td>
+          <td>全部缺失 → <code>unknown</code></td>
+        </tr>
+        <tr>
+          <td>image_id</td>
+          <td>stable_hash(external_key, brand, category)</td>
+          <td>固定輸入 → 固定輸出</td>
+          <td>brand/category 變動 → 新 id</td>
+        </tr>
+        <tr>
+          <td>bbox</td>
+          <td>[x0,y0,x1,y1] 且 x0&lt;x1,y0&lt;y1</td>
+          <td>[10,20,80,60]</td>
+          <td>[80,20,10,60]</td>
+        </tr>
+        <tr>
+          <td>mask_area_fraction</td>
+          <td>0 ~ 1</td>
+          <td>0.0032</td>
+          <td>-0.2 或 1.5</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>14.5.6 錯誤訊息範本與補救策略</h3>
+    <table>
+      <thead><tr><th>欄位</th><th>錯誤訊息範本</th><th>補救策略</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>brand_id</td>
+          <td><code>brand_id_invalid: empty or unknown</code></td>
+          <td>回填 <code>brand</code> 原字串再做 slugify；若仍空則設 <code>unknown</code></td>
+        </tr>
+        <tr>
+          <td>category</td>
+          <td><code>category_invalid: not in allowed list</code></td>
+          <td>映射到最近類別（如 "sneakers"→"shoes"），或保留原值並標記 difficulty_flags</td>
+        </tr>
+        <tr>
+          <td>source_channel</td>
+          <td><code>source_channel_missing</code></td>
+          <td>由 source_kind 或 source_name 推測，或設為 "unknown"</td>
+        </tr>
+        <tr>
+          <td>image_url</td>
+          <td><code>image_url_invalid: not a URL</code></td>
+          <td>使用 local_image_path，或標記 <code>missing_image</code></td>
+        </tr>
+        <tr>
+          <td>bbox</td>
+          <td><code>bbox_invalid: x0>=x1 or y0>=y1</code></td>
+          <td>回退到 GroundingDINO 次佳候選框，或標記 <code>needs_review</code></td>
+        </tr>
+        <tr>
+          <td>mask_area_fraction</td>
+          <td><code>mask_fraction_invalid: out of range</code></td>
+          <td>視為 mask 不可信，保留 bbox 但標記 <code>logo_mask_review_status=poor</code></td>
+        </tr>
+        <tr>
+          <td>quality_status</td>
+          <td><code>quality_gate_failed: {reason}</code></td>
+          <td>不進入 annotate；保留於 filtered 以供重跑調整閾值</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>14.5.7 驗證實作規則（對應程式邏輯）</h3>
+    <ul>
+      <li><b>slugify</b>：<code>re.sub(r"[^A-Za-z0-9._-]+","-", value.lower())</code></li>
+      <li><b>brand_id</b>：<code>canonical_brand_id = slugify(name)</code></li>
+      <li><b>image_external_key</b>：使用 record_id/brand/category/product_url/image_url 等組合做 <code>stable_hash</code></li>
+      <li><b>image_id</b>：<code>stable_hash({external_key, brand, category})</code></li>
+      <li><b>instance_id</b>：<code>stable_hash({image_id, proposal})</code></li>
+      <li><b>scene_bucket</b>：<code>scene_type &gt; source_channel &gt; category</code></li>
+      <li><b>trusted catalog</b>：<code>source_kind in {official, marketplace}</code> 或 <code>source_channel in {ecommerce, marketplace}</code></li>
+      <li><b>tier</b>：允許值 <code>proposal/silver/gold</code>（TIER_VALUES）</li>
+    </ul>
+
+    <h3>14.2 logo_instances → export/knowledge_base.json.logo_instances</h3>
+    <table>
+      <thead><tr><th>DB 欄位</th><th>輸出 JSON 欄位</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>instance_id</td><td>logo_instances[].instance_id</td><td>logo instance 主鍵</td></tr>
+        <tr><td>brand_id</td><td>logo_instances[].brand_id</td><td>品牌 id</td></tr>
+        <tr><td>bbox_json</td><td>logo_instances[].bbox</td><td>bbox</td></tr>
+        <tr><td>polygon_json</td><td>logo_instances[].polygon</td><td>多邊形（可為 null）</td></tr>
+        <tr><td>rotated_box_json</td><td>logo_instances[].rotated_box</td><td>旋轉框（可為 null）</td></tr>
+        <tr><td>mask_path</td><td>logo_instances[].mask_path</td><td>SAM3 mask 路徑</td></tr>
+        <tr><td>ocr_text</td><td>logo_instances[].ocr_text</td><td>OCR 文本</td></tr>
+        <tr><td>clip_score</td><td>logo_instances[].clip_score</td><td>CLIP 相似度</td></tr>
+        <tr><td>caption_text</td><td>logo_instances[].caption_text</td><td>caption</td></tr>
+        <tr><td>attribution_json</td><td>logo_instances[].attribution</td><td>完整 attribution</td></tr>
+        <tr><td>knowledge_json</td><td>logo_instances[].knowledge</td><td>Qwen knowledge split</td></tr>
+        <tr><td>risk_json</td><td>logo_instances[].risk</td><td>Qwen risk split</td></tr>
+        <tr><td>provenance_json</td><td>logo_instances[].provenance</td><td>來源與詳細 payload</td></tr>
+      </tbody>
+    </table>
+
+    <h3>14.3 brand_records → export/knowledge_base.json.brand_record</h3>
+    <table>
+      <thead><tr><th>DB 欄位</th><th>輸出 JSON 欄位</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>brand_id</td><td>brand_record.brand_id</td><td>品牌主鍵</td></tr>
+        <tr><td>display_name</td><td>brand_record.display_name</td><td>顯示名稱</td></tr>
+        <tr><td>industry</td><td>brand_record.industry</td><td>產業</td></tr>
+        <tr><td>country</td><td>brand_record.country</td><td>國家</td></tr>
+        <tr><td>knowledge_json</td><td>brand_record.*</td><td>合併進輸出</td></tr>
+      </tbody>
+    </table>
+
+    <h2>15. 每個輸出 JSON 完整樣本</h2>
+    <h3>15.1 meta/raw_records.json</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "brand": "Nike",
+    "category": "shoes",
+    "image_url": "https://example.com/img.jpg",
+    "source_name": "brand_site",
+    "source_channel": "advertising",
+    "source_kind": "marketplace",
+    "capture_context": {"country": "US"},
+    "year": 2023
+  }
+]</pre>
+
+    <h3>15.2 meta/candidate_records.json</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "brand": "Nike",
+    "category": "shoes",
+    "image_url": "https://example.com/img.jpg",
+    "source_name": "brand_site",
+    "source_channel": "advertising",
+    "source_kind": "marketplace",
+    "capture_context": {"country": "US"},
+    "year": 2023
+  }
+]</pre>
+
+    <h3>15.3 meta/passed_records.json</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "brand": "Nike",
+    "category": "shoes",
+    "image_url": "https://example.com/img.jpg",
+    "quality_status": "passed",
+    "quality_gate": {
+      "size_format": "passed",
+      "blur": "passed",
+      "dedupe": "passed",
+      "clip_logo": "passed",
+      "logo_prescreen": "passed"
+    }
+  }
+]</pre>
+
+    <h3>15.4 fetch/records.json</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "brand": "Nike",
+    "category": "shoes",
+    "image_url": "https://example.com/img.jpg"
+  }
+]</pre>
+
+    <h3>15.5 brand/brand_records.json</h3>
+    <pre>[
+  {
+    "query": "Nike",
+    "label": "Nike",
+    "aliases_en": ["Just Do It"],
+    "countries": ["United States"],
+    "industries": ["Sportswear"],
+    "matched": true
+  }
+]</pre>
+
+    <h3>15.6 segment/records_with_logo_masks.json</h3>
+    <pre>[
+  {
+    "record_id": "nike_shoes_0001",
+    "logo_segmentation_status": "ok",
+    "object_grounding_bbox_xyxy": [18,44,503,364],
+    "object_grounding_label": "sneaker",
+    "logo_grounding_bbox_xyxy": [120,78,182,125],
+    "logo_mask_path": "segment/masks/nike_shoes_0001.png",
+    "logo_mask_area_fraction": 0.0032
+  }
+]</pre>
+
+    <h3>15.7 review/review_queue.json</h3>
+    <pre>[
+  {
+    "instance_id": "img_001__logo_1",
+    "review_status": "needs_review",
+    "tier": "proposal",
+    "ocr_text": "NIKE",
+    "clip_score": 0.86
+  }
+]</pre>
+
+    <h3>15.7.1 Review UI 與決策狀態</h3>
+    <p>Review UI 可直接顯示：</p>
+    <ul>
+      <li>原圖</li>
+      <li>bbox / mask overlay</li>
+      <li>mask 原圖</li>
+      <li>attribution / knowledge / risk / raw_json</li>
+    </ul>
+    <p>Reviewer 可直接將 proposal 改成：</p>
+    <ul>
+      <li><code>rejected</code></li>
+      <li><code>silver</code></li>
+      <li><code>gold</code></li>
+    </ul>
+    <p>實際落地欄位為：<code>logo_instances.review_status</code> 與 <code>logo_instances.tier</code>。</p>
+
+    <h3>15.8 export/knowledge_base.json（更大規模示例）</h3>
+    <pre>[
+  {
+    "image_id": "img_001",
+    "engine_quality_status": "passed",
+    "engine_quality_gate": {"clip_logo": {"score": 0.27, "decision": "passed"}},
+    "logo_instances": [
+      {
+        "instance_id": "img_001__logo_1",
+        "bbox": [120,78,182,125],
+        "ocr_text": "NIKE",
+        "clip_score": 0.86,
+        "caption_text": "A Nike sneaker on a table.",
+        "attribution": {"source": "ocr", "qwen_validation": {"valid": true, "errors": []}},
+        "knowledge": {
+          "grounding": {"summary": "single visible logo on shoe side panel"},
+          "recognition": {"brand": "Nike", "variant": "swoosh icon-only"},
+          "world_knowledge": {"industry": "sportswear", "scene_relation_type": "product_branding"},
+          "ambiguity": {"needs_human_review": false, "uncertain_fields": []}
+        },
+        "risk": {
+          "risk": {
+            "primary_or_background": "primary",
+            "commercial_risk": "third_party_brand_present",
+            "recommended_action": "review_before_commercial_use"
+          }
+        }
+      },
+      {
+        "instance_id": "img_001__logo_2",
+        "bbox": [320,120,380,180],
+        "ocr_text": "AIR",
+        "clip_score": 0.61,
+        "caption_text": "Secondary text mark on the shoe.",
+        "attribution": {"source": "caption_hint"},
+        "knowledge": {
+          "grounding": {"summary": "secondary wordmark near heel"},
+          "recognition": {"brand": "Nike", "sub_brand": "Air"},
+          "world_knowledge": {"scene_relation_type": "product_branding"},
+          "ambiguity": {"needs_human_review": true, "uncertain_fields": ["sub_brand"]}
+        },
+        "risk": {"risk": {"primary_or_background": "secondary", "commercial_risk": "brand_exposure"}}
+      }
+    ]
+  },
+  {
+    "image_id": "img_002",
+    "engine_quality_status": "passed",
+    "engine_quality_gate": {"clip_logo": {"score": 0.31, "decision": "passed"}},
+    "logo_instances": [
+      {
+        "instance_id": "img_002__logo_1",
+        "bbox": [88,64,150,122],
+        "ocr_text": "Coca-Cola",
+        "clip_score": 0.92,
+        "caption_text": "The Coca-Cola logo on a soda can.",
+        "attribution": {"source": "clip+ocr"}
+      }
+    ]
+  }
+]</pre>
+
+    <h3>15.9 analysis/summary.json</h3>
+    <pre>{
+  "fetched_records": 10,
+  "knowledge_base_records": 10,
+  "unique_brands": 7,
+  "quality_passed": 10,
+  "logo_instances": 8
+}</pre>
+
+    <h2>15A. JSON 血緣與檔案歸屬</h2>
+    <p>下表總結每個主要 JSON 的來源、下游與角色：</p>
+    <table>
+      <thead><tr><th>Path</th><th>Producer</th><th>Consumed By</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td>meta/preflight.json</td><td>preflight</td><td>human/debug</td><td>模型可用性診斷</td></tr>
+        <tr><td>meta/raw_records.json</td><td>collector-fetch-products --all</td><td>balance, ontology</td><td>原始候選池</td></tr>
+        <tr><td>meta/candidate_records.json</td><td>balance-records</td><td>ontology, ingest, gate</td><td>平衡後候選池</td></tr>
+        <tr><td>meta/passed_records.json</td><td>export-image-records</td><td>balance-records</td><td>quality gate 後乾淨池</td></tr>
+        <tr><td>fetch/records.json</td><td>collector 或 batch final balance</td><td>segment, phase1</td><td>最終主流程輸入集</td></tr>
+        <tr><td>brand/brand_records.json</td><td>ontology-fetch-brands</td><td>seed-ontology, phase1</td><td>品牌 ontology</td></tr>
+        <tr><td>segment/records_with_logo_masks.json</td><td>segment-sam3</td><td>phase1 --segment-records</td><td>bbox/mask 主 JSON</td></tr>
+        <tr><td>review/review_queue.json</td><td>review-queue</td><td>reviewer, review-apply</td><td>人工審核 queue</td></tr>
+        <tr><td>export/knowledge_base.json</td><td>export-kb</td><td>training/export</td><td>最終交付物</td></tr>
+        <tr><td>analysis/summary.json</td><td>analyze-run</td><td>dashboard/human</td><td>run 統計摘要</td></tr>
+      </tbody>
+    </table>
+    <p>建議保留：<code>engine/logo_engine.db</code>, <code>fetch/records.json</code>, <code>brand/brand_records.json</code>, <code>review/review_queue.json</code>, <code>segment/records_with_logo_masks.json</code>, <code>export/knowledge_base.json</code>, <code>analysis/summary.json</code>。</p>
+
+    <h2>16. 爬蟲方案與流程</h2>
+    <h3>16.1 Collector 策略來源</h3>
+    <ul>
+      <li><b>商品型來源</b>：品牌官網 / 商品頁（如 Adidas、Lululemon）</li>
+      <li><b>圖片型來源</b>：Unsplash、Flickr（API 友好）</li>
+      <li><b>資料集來源</b>：LAION / CSV index 篩選</li>
+      <li><b>外部野外圖</b>：手拍 / 社群 / sports / advertising（manifest 或 folder）</li>
+    </ul>
+
+    <h3>16.2 Collector 實際流程</h3>
+    <ol>
+      <li>依照 brand × category 配對（或 manifest 清單）</li>
+      <li>呼叫對應 collector（產品、外部資料、manifest）</li>
+      <li>輸出 raw_records.json + 下載圖片</li>
+      <li>進入 balance/ontology/ingest pipeline</li>
+    </ol>
+
+    <h3>16.3 Rate Limit 與重試</h3>
+    <ul>
+      <li>各來源具有不同限制，collector 內含 retry</li>
+      <li>若遇 403（如 Lululemon/Adidas），會 fallback 到下一策略</li>
+    </ul>
+
+    <h3>16.4 品牌/網頁候選名單位置與決策規則</h3>
+    <p>候選名單定義於：</p>
+    <pre>/raid/ming/logo/multi_brand_fetcher.py → BRAND_SOURCES</pre>
+    <p>結構為：<code>(brand, category) → [strategy1, strategy2, ...]</code></p>
+    <p>決策流程：</p>
+    <ol>
+      <li><b>--all</b>：直接取 <code>BRAND_SOURCES.keys()</code></li>
+      <li><b>--brands + --categories</b>：只保留存在於 <code>BRAND_SOURCES</code> 的 pair</li>
+      <li>每個 pair 依策略順序嘗試；只要某策略回傳 ≥ min_records（預設 3）就停止</li>
+    </ol>
+    <p>策略類型範例：</p>
+    <ul>
+      <li><code>next_data</code>：抓 Next.js JSON</li>
+      <li><code>magento_bs4</code>：抓 Magento HTML</li>
+      <li><code>jsonld_per_page</code>：抓 JSON-LD</li>
+      <li><code>poshmark</code>：搜尋 fallback</li>
+    </ul>
+
+    <h2>17. 常見問題</h2>
+    <h3>17.1 SAM3 無法載入</h3>
+    <p>確認：</p>
+    <pre>/raid/ming/logo/logo_data_engine/sam3/sam3/model_builder.py</pre>
+    <p>並確認 <code>meta/preflight.json</code> 內 SAM3 為 available。</p>
+
+    <h3>17.2 VLM OOM</h3>
+    <p>若 VLM 出現 CUDA OOM，請限制 GPU 或改用小模型。</p>
+
+    <h2>10. 版本與維護</h2>
+    <p>文件版本 v1.1 對應 pipeline 當前預設行為。</p>
+  </body>
+</html>

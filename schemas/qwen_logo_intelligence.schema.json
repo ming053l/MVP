@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://logo-data-engine.local/schemas/qwen_logo_intelligence.schema.json",
+  "title": "Qwen Logo Intelligence Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "grounding",
+    "recognition",
+    "world_knowledge",
+    "risk",
+    "ambiguity"
+  ],
+  "properties": {
+    "grounding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["summary"],
+      "properties": {
+        "summary": {"type": "string"},
+        "bbox_confidence": {"type": ["number", "null"]},
+        "mask_confidence": {"type": ["number", "null"]},
+        "multi_instance_note": {"type": ["string", "null"]},
+        "small_or_occluded": {"type": ["boolean", "null"]}
+      }
+    },
+    "recognition": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["brand"],
+      "properties": {
+        "logo_text": {"type": ["string", "null"]},
+        "brand": {"type": ["string", "null"]},
+        "parent_company": {"type": ["string", "null"]},
+        "sub_brand": {"type": ["string", "null"]},
+        "variant": {"type": ["string", "null"]},
+        "variant_reason": {"type": ["string", "null"]},
+        "confidence": {"type": ["number", "null"]},
+        "ambiguity": {"type": ["string", "null"]}
+      }
+    },
+    "world_knowledge": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "industry": {"type": ["string", "null"]},
+        "products_services": {
+          "type": ["array", "null"],
+          "items": {"type": "string"}
+        },
+        "target_market": {"type": ["string", "null"]},
+        "logo_era": {"type": ["string", "null"]},
+        "relationships": {
+          "type": ["array", "null"],
+          "items": {"type": "string"}
+        },
+        "scene_reasonableness": {"type": ["string", "null"]},
+        "scene_relation_type": {"type": ["string", "null"]}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["commercial_risk"],
+      "properties": {
+        "primary_or_background": {"type": ["string", "null"]},
+        "commercial_risk": {"type": ["string", "null"]},
+        "compliance_risk": {"type": ["string", "null"]},
+        "brand_exposure_type": {"type": ["string", "null"]},
+        "recommended_action": {"type": ["string", "null"]},
+        "replacement_impact": {"type": ["string", "null"]},
+        "risk_reason": {"type": ["string", "null"]}
+      }
+    },
+    "ambiguity": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["needs_human_review"],
+      "properties": {
+        "needs_human_review": {"type": "boolean"},
+        "uncertain_fields": {
+          "type": ["array", "null"],
+          "items": {"type": "string"}
+        },
+        "note": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

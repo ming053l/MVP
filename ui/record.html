@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <title>Record {{ record.instance_id }}</title>
+    <style>
+      body { font-family: "Noto Sans TC", Arial, sans-serif; margin: 24px; background: #f7f7f8; color: #1b1b1f; }
+      .layout { display: grid; grid-template-columns: 420px 1fr; gap: 20px; }
+      .panel { background: #fff; border-radius: 10px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+      img { width: 100%; border-radius: 8px; }
+      pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: #f3f3f5; padding: 10px; border-radius: 8px; }
+      .actions { display: flex; gap: 8px; margin-top: 8px; }
+      .stack { display: grid; gap: 12px; }
+      .img-title { font-size: 12px; color: #666; margin: 4px 0 6px; }
+      .pill { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #eef2ff; color: #2643b5; font-size: 12px; margin-right: 6px; }
+      button { border: 1px solid #ccc; background: #fff; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+      button.primary { background: #1b5cff; color: #fff; border-color: #1b5cff; }
+      button.warn { background: #f5f5f5; border-color: #e0e0e0; }
+      @media (max-width: 960px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <a href="/">← Back</a>
+    <h2>Instance {{ record.instance_id }}</h2>
+    <div class="layout">
+      <div class="panel">
+        <div class="stack">
+          <div>
+            <div class="img-title">Original</div>
+            <img src="/image?path={{ record.local_image_path }}" />
+          </div>
+          <div>
+            <div class="img-title">BBox / Mask Overlay</div>
+            <img src="/overlay/{{ record.instance_id }}" />
+          </div>
+          {% if record.mask_path %}
+          <div>
+            <div class="img-title">Mask</div>
+            <img src="/image?path={{ record.mask_path }}" />
+          </div>
+          {% endif %}
+        </div>
+        <div class="actions">
+          <button onclick="setDecision('{{ record.instance_id }}','silver','needs_review')" class="primary">Keep → Silver</button>
+          <button onclick="setDecision('{{ record.instance_id }}','gold','needs_review')" class="primary">Keep → Gold</button>
+          <button onclick="setDecision('{{ record.instance_id }}','proposal','rejected')" class="warn">Reject</button>
+        </div>
+        <div style="margin-top:8px;font-size:12px;">
+          <span class="pill">Brand: {{ record.merged_brand_name or "unknown" }}</span>
+          <span class="pill">Category: {{ record.category or "unknown" }}</span>
+          <span class="pill">Status: {{ record.review_status or "needs_review" }}</span>
+          <span class="pill">Tier: {{ record.tier }}</span>
+          <br/><br/>
+          Detector score: {{ record.detector_score }}<br/>
+          CLIP score: {{ record.clip_score }}<br/>
+          OCR text: {{ record.ocr_text or "N/A" }}<br/>
+          Image: {{ record.local_image_path }}
+        </div>
+      </div>
+      <div class="panel">
+        <h3>BBox</h3>
+        <pre>{{ record.bbox_json | tojson(indent=2) }}</pre>
+        <h3>Attribution</h3>
+        <pre>{{ record.attribution_json | tojson(indent=2) }}</pre>
+        <h3>Knowledge</h3>
+        <pre>{{ record.knowledge_json | tojson(indent=2) }}</pre>
+        <h3>Risk</h3>
+        <pre>{{ record.risk_json | tojson(indent=2) }}</pre>
+        <h3>Logo Instance Raw</h3>
+        <pre>{{ record.raw_json | tojson(indent=2) }}</pre>
+        <h3>Image Record Raw</h3>
+        <pre>{{ record.image_raw_json | tojson(indent=2) }}</pre>
+      </div>
+    </div>
+
+    <script>
+      async function setDecision(instanceId, tier, reviewStatus) {
+        const res = await fetch("/api/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instance_id: instanceId, tier: tier, review_status: reviewStatus })
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          alert("Update failed: " + text);
+          return;
+        }
+        window.location.reload();
+      }
+    </script>
+  </body>
+</html>

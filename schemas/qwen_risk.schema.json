@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://logo-data-engine.local/schemas/qwen_risk.schema.json",
+  "title": "Qwen Risk Split",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["risk"],
+  "properties": {
+    "risk": {"type": ["object", "null"]}
+  }
+}

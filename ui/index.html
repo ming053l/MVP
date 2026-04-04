@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <title>Logo Data Engine Review</title>
+    <style>
+      body { font-family: "Noto Sans TC", Arial, sans-serif; margin: 24px; background: #f7f7f8; color: #1b1b1f; }
+      header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+      .filters { display: flex; gap: 8px; align-items: center; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+      .card { background: #fff; border-radius: 10px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+      .thumb { width: 100%; height: 180px; object-fit: cover; border-radius: 8px; background: #ddd; }
+      .meta { font-size: 12px; color: #555; margin-top: 6px; }
+      .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+      .thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .thumb-label { font-size: 11px; color: #666; margin: 0 0 4px; }
+      button { border: 1px solid #ccc; background: #fff; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+      button.primary { background: #1b5cff; color: #fff; border-color: #1b5cff; }
+      button.warn { background: #f5f5f5; border-color: #e0e0e0; }
+      .pagination { margin-top: 16px; display: flex; gap: 10px; }
+      a { color: inherit; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h2>Logo Data Engine Review</h2>
+        <div class="meta">Total: {{ total }} | Offset: {{ offset }} | Limit: {{ limit }}</div>
+      </div>
+      <form class="filters" method="get">
+        <input type="text" name="brand" placeholder="brand contains..." value="{{ brand or '' }}" />
+        <select name="status">
+          <option value="">all status</option>
+          {% for s in ["needs_review","auto_accept","rejected"] %}
+          <option value="{{ s }}" {% if status==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <select name="tier">
+          <option value="">all tier</option>
+          {% for t in ["proposal","silver","gold"] %}
+          <option value="{{ t }}" {% if tier==t %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+        <input type="number" name="limit" min="1" max="200" value="{{ limit }}" />
+        <button class="primary" type="submit">Apply</button>
+      </form>
+    </header>
+
+    <div class="grid">
+      {% for row in rows %}
+      <div class="card">
+        <a href="/record/{{ row.instance_id }}">
+          <div class="thumbs">
+            <div>
+              <div class="thumb-label">Original</div>
+              <img class="thumb" src="/image?path={{ row.local_image_path }}" />
+            </div>
+            <div>
+              <div class="thumb-label">Overlay</div>
+              <img class="thumb" src="/overlay/{{ row.instance_id }}" />
+            </div>
+          </div>
+        </a>
+        <div class="meta">Brand: {{ row.merged_brand_name or "unknown" }}</div>
+        <div class="meta">Category: {{ row.category or "unknown" }}</div>
+        <div class="meta">Status: {{ row.review_status or "needs_review" }} | Tier: {{ row.tier }}</div>
+        <div class="actions">
+          <button onclick="setDecision('{{ row.instance_id }}','silver','needs_review')" class="primary">Keep → Silver</button>
+          <button onclick="setDecision('{{ row.instance_id }}','gold','needs_review')" class="primary">Keep → Gold</button>
+          <button onclick="setDecision('{{ row.instance_id }}','proposal','rejected')" class="warn">Reject</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="pagination">
+      {% if offset - limit >= 0 %}
+        <a href="/?status={{ status or '' }}&tier={{ tier or '' }}&brand={{ brand or '' }}&limit={{ limit }}&offset={{ offset - limit }}">Prev</a>
+      {% endif %}
+      {% if offset + limit < total %}
+        <a href="/?status={{ status or '' }}&tier={{ tier or '' }}&brand={{ brand or '' }}&limit={{ limit }}&offset={{ offset + limit }}">Next</a>
+      {% endif %}
+    </div>
+
+    <script>
+      async function setDecision(instanceId, tier, reviewStatus) {
+        const res = await fetch("/api/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instance_id: instanceId, tier: tier, review_status: reviewStatus })
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          alert("Update failed: " + text);
+          return;
+        }
+        window.location.reload();
+      }
+    </script>
+  </body>
+</html>
