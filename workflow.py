@@ -23,6 +23,7 @@ from .backends import (
 from .db import EngineDB
 from .engine import annotate_from_segment_records, brand_rows_from_records, ingest_image_records, load_json_list
 from .quality import evaluate_image_quality, gate_report
+from .record_types import ImageQualityUpdateRow, ReviewDecisionRow
 from .schema import utcnow_iso
 
 
@@ -374,7 +375,7 @@ def gate_images(
         query += f" LIMIT {int(limit)}"
 
     image_rows = db.conn.execute(query, params).fetchall()
-    updates = []
+    updates: List[ImageQualityUpdateRow] = []
     evaluated = []
     for row in image_rows:
         record = json.loads(str(row["raw_json"]))
@@ -485,7 +486,7 @@ def apply_review_queue(
 ) -> Dict[str, Any]:
     decisions = load_json_list(decisions_path)
     now = utcnow_iso()
-    rows = []
+    rows: List[ReviewDecisionRow] = []
     for decision in decisions:
         instance_id = str(decision.get("instance_id") or "").strip()
         if not instance_id:

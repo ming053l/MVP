@@ -4,9 +4,9 @@ from contextlib import contextmanager
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, Iterator, List
 
-from .record_types import BrandRow, ImageRow, LogoInstanceRow
+from .record_types import BrandRow, ImageQualityUpdateRow, ImageRow, LogoInstanceRow, ReviewDecisionRow
 
 
 class EngineDB:
@@ -154,6 +154,12 @@ class EngineDB:
 
     def _execute_many(self, query: str, rows: Iterable[Dict[str, Any]]) -> None:
         self.conn.executemany(query, list(rows))
+
+    @staticmethod
+    def _loads_json(value: Any) -> Any:
+        if value in (None, ""):
+            return None
+        return json.loads(str(value))
 
     def upsert_brand_records(self, rows: Iterable[BrandRow], *, commit: bool = True) -> int:
         rows = list(rows)
@@ -351,7 +357,7 @@ class EngineDB:
         ).fetchall()
         return {str(row["quality_status"]): int(row["total"]) for row in rows}
 
-    def update_image_quality(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
+    def update_image_quality(self, rows: Iterable[ImageQualityUpdateRow], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0
@@ -372,10 +378,8 @@ class EngineDB:
             self.conn.commit()
         return len(rows)
 
-    def export_joined_records(self) -> List[Dict[str, Any]]:
-        image_rows = self.conn.execute("SELECT * FROM image_records ORDER BY created_at, image_id").fetchall()
+    def iter_joined_records(self, *, batch_size: int = 500) -> Iterator[Dict[str, Any]]:
         brand_rows = self.conn.execute("SELECT * FROM brand_records").fetchall()
-        logo_rows = self.conn.execute("SELECT * FROM logo_instances ORDER BY created_at, instance_id").fetchall()
         brand_name_index = self.brand_name_index()
 
         brands = {
@@ -384,57 +388,95 @@ class EngineDB:
                 "canonical_name": row["canonical_name"],
                 "display_name": row["display_name"],
                 "tier": row["tier"],
-                **json.loads(str(row["knowledge_json"])),
+                **(self._loads_json(row["knowledge_json"]) or {}),
             }
             for row in brand_rows
         }
 
-        logos_by_image: Dict[str, List[Dict[str, Any]]] = {}
-        for row in logo_rows:
-            image_id = str(row["image_id"])
-            logos_by_image.setdefault(image_id, []).append(
-                {
-                    "instance_id": row["instance_id"],
-                    "brand_id": row["brand_id"],
-                    "merged_brand_name": row["merged_brand_name"],
-                    "detector_name": row["detector_name"],
-                    "ocr_engine": row["ocr_engine"],
-                    "clip_engine": row["clip_engine"],
-                    "bbox": json.loads(row["bbox_json"]) if row["bbox_json"] else None,
-                    "polygon": json.loads(row["polygon_json"]) if row["polygon_json"] else None,
-                    "rotated_box": json.loads(row["rotated_box_json"]) if row["rotated_box_json"] else None,
-                    "mask_path": row["mask_path"],
-                    "detector_score": row["detector_score"],
-                    "ocr_text": row["ocr_text"],
-                    "ocr_confidence": row["ocr_confidence"],
-                    "clip_score": row["clip_score"],
-                    "caption_text": row["caption_text"],
-                    "caption_model": row["caption_model"],
-                    "attribution": json.loads(str(row["attribution_json"])) if row["attribution_json"] else None,
-                    "knowledge": json.loads(str(row["knowledge_json"])) if row["knowledge_json"] else None,
-                    "risk": json.loads(str(row["risk_json"])) if row["risk_json"] else None,
-                    "confidence": row["confidence"],
-                    "ambiguity_note": row["ambiguity_note"],
-                    "review_status": row["review_status"],
-                    "tier": row["tier"],
-                    "provenance": json.loads(str(row["provenance_json"])),
-                    "brand_record": brands.get(str(row["brand_id"])) if row["brand_id"] else None,
-                }
-            )
+        offset = 0
+        while True:
+            image_rows = self.conn.execute(
+                "SELECT * FROM image_records ORDER BY created_at, image_id LIMIT ? OFFSET ?",
+                [int(batch_size), int(offset)],
+            ).fetchall()
+            if not image_rows:
+                break
 
-        exported: List[Dict[str, Any]] = []
-        for row in image_rows:
-            payload = json.loads(str(row["raw_json"]))
-            payload["image_id"] = row["image_id"]
-            payload["engine_tier"] = row["tier"]
-            payload["engine_quality_status"] = row["quality_status"]
-            payload["engine_quality_score"] = row["quality_score"]
-            payload["engine_quality_gate"] = json.loads(str(row["quality_gate_json"])) if row["quality_gate_json"] else None
-            payload["difficulty_flags"] = json.loads(str(row["difficulty_flags_json"])) if row["difficulty_flags_json"] else []
-            payload["engine_brand_record"] = brands.get(brand_name_index.get(str(row["brand_hint"] or "").lower(), ""))
-            payload["logo_instances"] = logos_by_image.get(str(row["image_id"]), [])
-            exported.append(payload)
-        return exported
+            image_ids = [str(row["image_id"]) for row in image_rows]
+            placeholders = ",".join("?" for _ in image_ids)
+            logo_rows = self.conn.execute(
+                f"""
+                SELECT li.*,
+                       br.canonical_name AS brand_canonical_name,
+                       br.display_name AS brand_display_name,
+                       br.tier AS brand_tier,
+                       br.knowledge_json AS brand_knowledge_json
+                FROM logo_instances li
+                LEFT JOIN brand_records br ON br.brand_id = li.brand_id
+                WHERE li.image_id IN ({placeholders})
+                ORDER BY li.created_at, li.instance_id
+                """,
+                image_ids,
+            ).fetchall()
+
+            logos_by_image: Dict[str, List[Dict[str, Any]]] = {}
+            for row in logo_rows:
+                image_id = str(row["image_id"])
+                brand_record = None
+                if row["brand_id"]:
+                    brand_record = brands.get(str(row["brand_id"])) or {
+                        "brand_id": row["brand_id"],
+                        "canonical_name": row["brand_canonical_name"],
+                        "display_name": row["brand_display_name"],
+                        "tier": row["brand_tier"],
+                        **(self._loads_json(row["brand_knowledge_json"]) or {}),
+                    }
+                logos_by_image.setdefault(image_id, []).append(
+                    {
+                        "instance_id": row["instance_id"],
+                        "brand_id": row["brand_id"],
+                        "merged_brand_name": row["merged_brand_name"],
+                        "detector_name": row["detector_name"],
+                        "ocr_engine": row["ocr_engine"],
+                        "clip_engine": row["clip_engine"],
+                        "bbox": self._loads_json(row["bbox_json"]),
+                        "polygon": self._loads_json(row["polygon_json"]),
+                        "rotated_box": self._loads_json(row["rotated_box_json"]),
+                        "mask_path": row["mask_path"],
+                        "detector_score": row["detector_score"],
+                        "ocr_text": row["ocr_text"],
+                        "ocr_confidence": row["ocr_confidence"],
+                        "clip_score": row["clip_score"],
+                        "caption_text": row["caption_text"],
+                        "caption_model": row["caption_model"],
+                        "attribution": self._loads_json(row["attribution_json"]),
+                        "knowledge": self._loads_json(row["knowledge_json"]),
+                        "risk": self._loads_json(row["risk_json"]),
+                        "confidence": row["confidence"],
+                        "ambiguity_note": row["ambiguity_note"],
+                        "review_status": row["review_status"],
+                        "tier": row["tier"],
+                        "provenance": self._loads_json(row["provenance_json"]),
+                        "brand_record": brand_record,
+                    }
+                )
+
+            for row in image_rows:
+                payload = self._loads_json(row["raw_json"]) or {}
+                payload["image_id"] = row["image_id"]
+                payload["engine_tier"] = row["tier"]
+                payload["engine_quality_status"] = row["quality_status"]
+                payload["engine_quality_score"] = row["quality_score"]
+                payload["engine_quality_gate"] = self._loads_json(row["quality_gate_json"])
+                payload["difficulty_flags"] = self._loads_json(row["difficulty_flags_json"]) or []
+                payload["engine_brand_record"] = brands.get(brand_name_index.get(str(row["brand_hint"] or "").lower(), ""))
+                payload["logo_instances"] = logos_by_image.get(str(row["image_id"]), [])
+                yield payload
+
+            offset += batch_size
+
+    def export_joined_records(self, *, batch_size: int = 500) -> List[Dict[str, Any]]:
+        return list(self.iter_joined_records(batch_size=batch_size))
 
     def export_image_records(self, quality_status: str | None = None, limit: int | None = None) -> List[Dict[str, Any]]:
         query = "SELECT raw_json FROM image_records"
@@ -449,7 +491,7 @@ class EngineDB:
         rows = self.conn.execute(query, params).fetchall()
         return [json.loads(str(row["raw_json"])) for row in rows]
 
-    def apply_review_decisions(self, rows: Iterable[Dict[str, Any]], *, commit: bool = True) -> int:
+    def apply_review_decisions(self, rows: Iterable[ReviewDecisionRow], *, commit: bool = True) -> int:
         rows = list(rows)
         if not rows:
             return 0

@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image, ImageDraw
 
 from .db import EngineDB
+from .record_types import ReviewDecisionRow
 from .schema import utcnow_iso
 
 
@@ -211,17 +212,16 @@ def create_app(db_path: Path, image_root: Path) -> FastAPI:
             raise HTTPException(status_code=400, detail="instance_id required")
         tier = str(payload.get("tier") or "proposal").strip().lower()
         review_status = str(payload.get("review_status") or "needs_review").strip().lower()
+        rows: List[ReviewDecisionRow] = [
+            {
+                "instance_id": instance_id,
+                "tier": tier,
+                "review_status": review_status,
+                "updated_at": utcnow_iso(),
+            }
+        ]
         with EngineDB(db_path) as db:
-            db.apply_review_decisions(
-                [
-                    {
-                        "instance_id": instance_id,
-                        "tier": tier,
-                        "review_status": review_status,
-                        "updated_at": utcnow_iso(),
-                    }
-                ]
-            )
+            db.apply_review_decisions(rows)
         return JSONResponse({"instance_id": instance_id, "tier": tier, "review_status": review_status})
 
     @app.get("/image")

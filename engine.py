@@ -395,9 +395,17 @@ def import_run(
 
 
 def export_joined_records(db: EngineDB, output_path: str | Path, dry_run: bool = False) -> Dict[str, Any]:
-    rows = db.export_joined_records()
     path = Path(output_path)
+    record_count = db.table_counts()["image_records"]
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"output": str(path), "records": len(rows)}
+        with path.open("w", encoding="utf-8") as handle:
+            handle.write("[\n")
+            wrote_any = False
+            for row in db.iter_joined_records():
+                if wrote_any:
+                    handle.write(",\n")
+                handle.write(json.dumps(row, ensure_ascii=False, indent=2))
+                wrote_any = True
+            handle.write("\n]\n")
+    return {"output": str(path), "records": record_count}

@@ -134,3 +134,20 @@ class LogoInstanceRow(TypedDict):
     raw_json: str
     created_at: str
     updated_at: str
+
+
+class ImageQualityUpdateRow(TypedDict):
+    image_id: str
+    quality_status: str
+    quality_score: float | None
+    quality_gate_json: str
+    difficulty_flags_json: str
+    last_gated_at: str
+    updated_at: str
+
+
+class ReviewDecisionRow(TypedDict):
+    instance_id: str
+    tier: str
+    review_status: str
+    updated_at: str
