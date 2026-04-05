@@ -46,6 +46,7 @@ class QwenKnowledgeEngine(BackendMixin):
         else:
             text_prompt = (system + "\n" if system else "") + prompt
         inputs = self.tokenizer(text_prompt, return_tensors="pt").to(self.device)
+        prompt_tokens = int(inputs["input_ids"].shape[-1])
         with torch.no_grad():
             generated = self.model.generate(
                 **inputs,
@@ -53,5 +54,8 @@ class QwenKnowledgeEngine(BackendMixin):
                 do_sample=self.temperature > 0,
                 temperature=self.temperature,
             )
-        text = self.tokenizer.decode(generated[0], skip_special_tokens=True)
+        generated_ids = generated[0][prompt_tokens:]
+        text = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        if not text.strip():
+            text = self.tokenizer.decode(generated[0], skip_special_tokens=True)
         return {"model_id": self.model_id, "text": text.strip() or None, "error": None, "prompt": prompt}

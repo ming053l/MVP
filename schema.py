@@ -173,26 +173,60 @@ def resolve_local_path(value: str | None) -> str | None:
     return normalized
 
 
-def _extract_json_block(text: str) -> str | None:
-    if not text:
-        return None
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    return text[start : end + 1]
+def _extract_json_candidates(text: str) -> List[str]:
+    candidates: List[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+            continue
+
+        if char == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidates.append(text[start : index + 1])
+                start = None
+
+    return candidates
 
 
 def parse_qwen_json(text: str | None) -> Dict[str, Any]:
     if not text:
         return {"_error": "empty_response"}
-    block = _extract_json_block(text)
-    if not block:
+    decoder = json.JSONDecoder()
+    candidates = _extract_json_candidates(text)
+    if not candidates:
         return {"_error": "no_json_block", "_raw": text}
-    try:
-        return json.loads(block)
-    except json.JSONDecodeError as exc:
-        return {"_error": f"json_decode_error: {exc}", "_raw": text}
+    last_error: str | None = None
+    for block in reversed(candidates):
+        try:
+            parsed, end = decoder.raw_decode(block)
+            if isinstance(parsed, dict) and block[end:].strip() == "":
+                return parsed
+        except json.JSONDecodeError as exc:
+            last_error = f"json_decode_error: {exc}"
+    return {"_error": last_error or "json_decode_error: unable_to_parse_candidate_blocks", "_raw": text}
 
 
 def validate_qwen_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -200,6 +234,13 @@ def validate_qwen_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     for key in QWEN_REQUIRED_KEYS:
         if key not in payload:
             errors.append(f"missing:{key}")
+            continue
+        section = payload.get(key)
+        if not isinstance(section, dict):
+            errors.append(f"invalid_section:{key}")
+            continue
+        if section.get("_error"):
+            errors.append(f"section_parse:{key}:{section.get('_error')}")
     if jsonschema is not None and not errors:
         try:
             jsonschema.validate(instance=payload, schema=QWEN_LOGO_INTELLIGENCE_SCHEMA)
