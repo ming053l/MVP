@@ -304,6 +304,7 @@ BRAND_DIR="${RUN_DIR}/brand"
 REVIEW_DIR="${RUN_DIR}/review"
 EXPORT_DIR="${RUN_DIR}/export"
 META_DIR="${RUN_DIR}/meta"
+ANALYSIS_DIR="${RUN_DIR}/analysis"
 SEGMENT_DIR="${RUN_DIR}/segment"
 
 FETCH_JSON="${FETCH_DIR}/records.json"
@@ -311,11 +312,17 @@ FETCH_IMAGES="${FETCH_DIR}/images"
 BRAND_JSON="${BRAND_DIR}/brand_records.json"
 REVIEW_JSON="${REVIEW_DIR}/review_queue.json"
 EXPORT_JSON="${EXPORT_DIR}/knowledge_base.json"
+ANALYSIS_MD="${ANALYSIS_DIR}/analysis.md"
+ANALYSIS_JSON="${ANALYSIS_DIR}/summary.json"
+COVERAGE_MD="${ANALYSIS_DIR}/coverage.md"
+COVERAGE_JSON="${ANALYSIS_DIR}/coverage.json"
+METRICS_MD="${ANALYSIS_DIR}/metrics.md"
+METRICS_JSON="${ANALYSIS_DIR}/metrics.json"
 SEGMENT_JSON="${SEGMENT_DIR}/records_with_logo_masks.json"
 SEGMENT_MASKS="${SEGMENT_DIR}/masks"
 SEGMENT_VIZ="${SEGMENT_DIR}/visualizations"
 
-mkdir -p "${FETCH_DIR}" "${BRAND_DIR}" "${REVIEW_DIR}" "${EXPORT_DIR}" "${META_DIR}" "${RUN_DIR}/engine" "${SEGMENT_DIR}"
+mkdir -p "${FETCH_DIR}" "${BRAND_DIR}" "${REVIEW_DIR}" "${EXPORT_DIR}" "${META_DIR}" "${ANALYSIS_DIR}" "${RUN_DIR}/engine" "${SEGMENT_DIR}"
 
 DRY_RUN_FLAG=()
 if [[ ${DRY_RUN} -eq 1 ]]; then
@@ -463,6 +470,34 @@ EXPORT_CMD=(
 )
 run_and_capture "${META_DIR}/export.json" "${EXPORT_CMD[@]}"
 
+ANALYZE_CMD=(
+  "${ENGINE_CMD[@]}"
+  --db "${DB_PATH}"
+  analyze-run
+  --run-dir "${RUN_DIR}"
+  --output-md "${ANALYSIS_MD}"
+  --output-json "${ANALYSIS_JSON}"
+)
+run_and_capture "${META_DIR}/analyze.json" "${ANALYZE_CMD[@]}"
+
+COVERAGE_CMD=(
+  "${ENGINE_CMD[@]}"
+  --db "${DB_PATH}"
+  coverage-plan
+  --output-md "${COVERAGE_MD}"
+  --output-json "${COVERAGE_JSON}"
+)
+run_and_capture "${META_DIR}/coverage.json" "${COVERAGE_CMD[@]}"
+
+METRICS_CMD=(
+  "${ENGINE_CMD[@]}"
+  --db "${DB_PATH}"
+  metrics-report
+  --output-md "${METRICS_MD}"
+  --output-json "${METRICS_JSON}"
+)
+run_and_capture "${META_DIR}/metrics_report.json" "${METRICS_CMD[@]}"
+
 SUMMARY_CMD=(
   "${ENGINE_CMD[@]}"
   --db "${DB_PATH}"
@@ -480,4 +515,10 @@ records_json: ${FETCH_JSON}
 brand_records_json: ${BRAND_JSON}
 review_queue_json: ${REVIEW_JSON}
 knowledge_base_json: ${EXPORT_JSON}
+analysis_md: ${ANALYSIS_MD}
+analysis_json: ${ANALYSIS_JSON}
+coverage_md: ${COVERAGE_MD}
+coverage_json: ${COVERAGE_JSON}
+metrics_md: ${METRICS_MD}
+metrics_json: ${METRICS_JSON}
 EOF

@@ -149,6 +149,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     analyze.add_argument("--output-json", required=True, help="Output machine-readable summary json path")
     analyze.add_argument("--target-records", type=int, default=None, help="Optional target used for the batch")
 
+    coverage = subparsers.add_parser("coverage-plan", help="Plan which brand/category pairs need more collection")
+    coverage.add_argument("--output-md", required=True, help="Output coverage markdown path")
+    coverage.add_argument("--output-json", required=True, help="Output machine-readable coverage json path")
+    coverage.add_argument("--target-per-pair", type=int, default=20, help="Desired passed-image coverage per configured pair")
+    coverage.add_argument("--max-pairs", type=int, default=50, help="Maximum recommendation rows to include")
+
+    metrics_report = subparsers.add_parser("metrics-report", help="Render recent stage metrics into markdown/json")
+    metrics_report.add_argument("--output-md", required=True, help="Output metrics markdown path")
+    metrics_report.add_argument("--output-json", required=True, help="Output machine-readable metrics json path")
+    metrics_report.add_argument("--limit", type=int, default=100, help="How many recent metric rows to inspect")
+
     import_run_parser = subparsers.add_parser("import-run", help="Import a completed run directory into the engine")
     import_run_parser.add_argument("--run-dir", required=True, help="Path to runs/<run_name>")
     import_run_parser.add_argument("--resume", action="store_true", help="Skip rows already present in DB")
@@ -417,6 +428,41 @@ def main(argv: list[str] | None = None) -> int:
                 "output_json": args.output_json,
                 "target_records": args.target_records,
                 "summary": summary_payload["totals"],
+            }
+
+        elif args.command == "coverage-plan":
+            from .coverage import write_coverage_plan
+
+            summary_payload = write_coverage_plan(
+                db_path,
+                args.output_md,
+                args.output_json,
+                target_per_pair=args.target_per_pair,
+                max_pairs=args.max_pairs,
+            )
+            result = {
+                "db": str(db_path),
+                "output_md": args.output_md,
+                "output_json": args.output_json,
+                "target_per_pair": args.target_per_pair,
+                "totals": summary_payload["totals"],
+            }
+
+        elif args.command == "metrics-report":
+            from .reporting import write_stage_metrics_report
+
+            summary_payload = write_stage_metrics_report(
+                db_path,
+                args.output_md,
+                args.output_json,
+                limit=args.limit,
+            )
+            result = {
+                "db": str(db_path),
+                "output_md": args.output_md,
+                "output_json": args.output_json,
+                "limit": args.limit,
+                "totals": summary_payload["totals"],
             }
 
         elif args.command == "import-run":

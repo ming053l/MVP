@@ -219,3 +219,131 @@ def write_run_analysis(
     md_path.write_text(render_run_analysis_markdown(summary), encoding="utf-8")
     json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def build_stage_metrics_report(db_path: str | Path, *, limit: int = 100) -> Dict[str, Any]:
+    db_path = Path(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT metric_id, run_id, stage_name, command_name, metrics_json, created_at
+            FROM stage_metrics
+            ORDER BY metric_id DESC
+            LIMIT ?
+            """,
+            [int(limit)],
+        ).fetchall()
+
+    entries: List[Dict[str, Any]] = []
+    latest_by_stage: Dict[str, Dict[str, Any]] = {}
+    stage_counts: Counter = Counter()
+    for row in rows:
+        payload = json.loads(str(row["metrics_json"]))
+        entry = {
+            "metric_id": int(row["metric_id"]),
+            "run_id": str(row["run_id"]),
+            "stage_name": str(row["stage_name"]),
+            "command_name": row["command_name"],
+            "created_at": str(row["created_at"]),
+            "metrics": payload,
+        }
+        entries.append(entry)
+        stage_counts[entry["stage_name"]] += 1
+        if entry["stage_name"] not in latest_by_stage:
+            latest_by_stage[entry["stage_name"]] = entry
+
+    recommendations: List[str] = []
+    gate = latest_by_stage.get("gate", {}).get("metrics", {})
+    gate_seen = int(gate.get("seen_images") or 0)
+    gate_passed = int((gate.get("status_counts") or {}).get("passed") or 0)
+    if gate_seen and gate_passed / gate_seen < 0.4:
+        recommendations.append("Quality gate pass rate is below 40%; inspect collectors or loosen acquisition sources.")
+
+    annotation = latest_by_stage.get("annotate_db", {}).get("metrics", {})
+    if int(annotation.get("verification_conflicts") or 0) > 0:
+        recommendations.append("Verification conflicts were detected; review Qwen enrichment or ontology mappings.")
+    if int(annotation.get("text_only_instances") or 0) > 0:
+        recommendations.append("Text-only proposals are being created; this is expected in Phase 1 lite, but visual enrichment is still pending.")
+
+    review = latest_by_stage.get("review_queue", {}).get("metrics", {})
+    must_review = int((review.get("selected_bucket_counts") or {}).get("must_review") or 0)
+    spot_check = int((review.get("selected_bucket_counts") or {}).get("spot_check") or 0)
+    if must_review > 0:
+        recommendations.append(f"Review queue still has {must_review} must-review items; this is the main human-load driver.")
+    if spot_check > 0:
+        recommendations.append(f"Spot-check queue currently samples {spot_check} records; use this to recalibrate acceptance thresholds.")
+
+    return {
+        "db": str(db_path),
+        "limit": int(limit),
+        "totals": {
+            "metric_rows": len(entries),
+            "unique_stages": len(stage_counts),
+        },
+        "latest_by_stage": latest_by_stage,
+        "stage_counts": dict(stage_counts),
+        "recommendations": recommendations,
+        "recent_entries": entries,
+    }
+
+
+def render_stage_metrics_markdown(summary: Dict[str, Any]) -> str:
+    latest_rows = summary["latest_by_stage"]
+    lines = [
+        "# Stage Metrics Report",
+        "",
+        f"DB: `{summary['db']}`",
+        "",
+        "## Snapshot",
+        "",
+        f"- Metric rows loaded: {summary['totals']['metric_rows']}",
+        f"- Unique stages: {summary['totals']['unique_stages']}",
+        "",
+        "## Latest Stage Rows",
+        "",
+        "| Stage | Created At | Command | Highlights |",
+        "| --- | --- | --- | --- |",
+    ]
+    for stage_name in sorted(latest_rows):
+        row = latest_rows[stage_name]
+        metrics = row["metrics"]
+        highlights = []
+        for key in ("seen_images", "updated_images", "inserted", "inserted_instances", "records"):
+            if key in metrics:
+                highlights.append(f"{key}={metrics[key]}")
+        if "review_bucket_counts" in metrics:
+            highlights.append(f"review_bucket_counts={metrics['review_bucket_counts']}")
+        if "status_counts" in metrics:
+            highlights.append(f"status_counts={metrics['status_counts']}")
+        lines.append(
+            f"| {stage_name} | {row['created_at']} | {row.get('command_name') or ''} | {'; '.join(highlights) or '_none_'} |"
+        )
+    lines.extend(["", "## Recommendations", ""])
+    if summary["recommendations"]:
+        for item in summary["recommendations"]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- No immediate issues detected from the latest stage metrics.")
+    lines.extend(["", "## Stage Frequency", "", "| Stage | Count |", "| --- | ---: |"])
+    for stage_name, count in sorted(summary["stage_counts"].items()):
+        lines.append(f"| {stage_name} | {count} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_stage_metrics_report(
+    db_path: str | Path,
+    output_md: str | Path,
+    output_json: str | Path,
+    *,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    summary = build_stage_metrics_report(db_path, limit=limit)
+    md_path = Path(output_md)
+    json_path = Path(output_json)
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(render_stage_metrics_markdown(summary), encoding="utf-8")
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary

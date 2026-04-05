@@ -237,6 +237,10 @@ REVIEW_JSON="${REVIEW_DIR}/review_queue.json"
 EXPORT_JSON="${EXPORT_DIR}/knowledge_base.json"
 ANALYSIS_MD="${ANALYSIS_DIR}/analysis.md"
 ANALYSIS_JSON="${ANALYSIS_DIR}/summary.json"
+COVERAGE_MD="${ANALYSIS_DIR}/coverage.md"
+COVERAGE_JSON="${ANALYSIS_DIR}/coverage.json"
+METRICS_MD="${ANALYSIS_DIR}/metrics.md"
+METRICS_JSON="${ANALYSIS_DIR}/metrics.json"
 SEGMENT_JSON="${SEGMENT_DIR}/records_with_logo_masks.json"
 SEGMENT_MASKS="${SEGMENT_DIR}/masks"
 SEGMENT_VIZ="${SEGMENT_DIR}/visualizations"
@@ -434,6 +438,20 @@ run_and_capture "${ANALYSIS_DIR}/analyze.json" \
   --output-json "${ANALYSIS_JSON}" \
   --target-records "${TARGET_RECORDS}"
 
+run_and_capture "${ANALYSIS_DIR}/coverage_run.json" \
+  "${ENGINE_CMD[@]}" \
+  --db "${DB_PATH}" \
+  coverage-plan \
+  --output-md "${COVERAGE_MD}" \
+  --output-json "${COVERAGE_JSON}"
+
+run_and_capture "${ANALYSIS_DIR}/metrics_run.json" \
+  "${ENGINE_CMD[@]}" \
+  --db "${DB_PATH}" \
+  metrics-report \
+  --output-md "${METRICS_MD}" \
+  --output-json "${METRICS_JSON}"
+
 run_and_capture "${META_DIR}/summary.json" \
   "${ENGINE_CMD[@]}" \
   --db "${DB_PATH}" \
@@ -455,4 +473,8 @@ review_queue_json: ${REVIEW_JSON}
 knowledge_base_json: ${EXPORT_JSON}
 analysis_md: ${ANALYSIS_MD}
 analysis_json: ${ANALYSIS_JSON}
+coverage_md: ${COVERAGE_MD}
+coverage_json: ${COVERAGE_JSON}
+metrics_md: ${METRICS_MD}
+metrics_json: ${METRICS_JSON}
 EOF
