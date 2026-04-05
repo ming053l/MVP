@@ -345,14 +345,20 @@ run_and_capture "${META_DIR}/staging_ingest.json" \
   --records-json "${CANDIDATE_JSON}" \
   "${RESUME_FLAG[@]}"
 
-run_and_capture "${META_DIR}/staging_gate.json" \
-  "${ENGINE_CMD[@]}" \
-  --db "${STAGING_DB_PATH}" \
-  gate \
-  --all \
-  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip ) \
-  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen ) \
+STAGING_GATE_CMD=(
+  "${ENGINE_CMD[@]}"
+  --db "${STAGING_DB_PATH}"
+  gate
+  --all
   --report
+)
+if [[ ${SKIP_CLIP} -eq 1 ]]; then
+  STAGING_GATE_CMD+=(--skip-clip)
+fi
+if [[ ${SKIP_PRESCREEN} -eq 1 ]]; then
+  STAGING_GATE_CMD+=(--skip-prescreen)
+fi
+run_and_capture "${META_DIR}/staging_gate.json" "${STAGING_GATE_CMD[@]}"
 
 run_and_capture "${META_DIR}/export_passed.json" \
   "${ENGINE_CMD[@]}" \
@@ -407,21 +413,37 @@ if [[ ${WITH_SAM3} -eq 1 ]]; then
   run_and_capture "${META_DIR}/segment.json" "${SEGMENT_CMD[@]}"
 fi
 
-run_and_capture "${META_DIR}/phase1.json" \
-  "${ENGINE_CMD[@]}" \
-  --db "${DB_PATH}" \
-  phase1-workflow \
-  --records-json "${FETCH_JSON}" \
-  --brand-records "${BRAND_JSON}" \
-  --review-output "${REVIEW_JSON}" \
-  $( [[ ${WITH_SAM3} -eq 1 ]] && echo --segment-records "${SEGMENT_JSON}" --segment-enrich ) \
-  $( [[ ${SKIP_DETECTOR} -eq 1 ]] && echo --skip-detector ) \
-  $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr ) \
-  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip ) \
-  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen ) \
-  $( [[ ${USE_VLM} -eq 1 ]] && echo --use-vlm --vlm-model-id "${VLM_MODEL_ID}" ) \
-  $( [[ ${USE_QWEN_QA} -eq 1 ]] && echo --use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}" ) \
+PHASE1_CMD=(
+  "${ENGINE_CMD[@]}"
+  --db "${DB_PATH}"
+  phase1-workflow
+  --records-json "${FETCH_JSON}"
+  --brand-records "${BRAND_JSON}"
+  --review-output "${REVIEW_JSON}"
   "${RESUME_FLAG[@]}"
+)
+if [[ ${WITH_SAM3} -eq 1 ]]; then
+  PHASE1_CMD+=(--segment-records "${SEGMENT_JSON}" --segment-enrich)
+fi
+if [[ ${SKIP_DETECTOR} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-detector)
+fi
+if [[ ${SKIP_OCR} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-ocr)
+fi
+if [[ ${SKIP_CLIP} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-clip)
+fi
+if [[ ${SKIP_PRESCREEN} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-prescreen)
+fi
+if [[ ${USE_VLM} -eq 1 ]]; then
+  PHASE1_CMD+=(--use-vlm --vlm-model-id "${VLM_MODEL_ID}")
+fi
+if [[ ${USE_QWEN_QA} -eq 1 ]]; then
+  PHASE1_CMD+=(--use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}")
+fi
+run_and_capture "${META_DIR}/phase1.json" "${PHASE1_CMD[@]}"
 
 run_and_capture "${META_DIR}/export.json" \
   "${ENGINE_CMD[@]}" \

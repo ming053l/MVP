@@ -343,18 +343,36 @@ run_and_capture() {
 
 ENGINE_CMD=(python -m logo_data_engine)
 
-run_and_capture "${META_DIR}/preflight.json" \
-  "${ENGINE_CMD[@]}" \
-  --db "${DB_PATH}" \
-  preflight \
-  $( [[ ${WITH_SAM3} -eq 1 ]] && echo --with-sam3 ) \
-  $( [[ ${USE_VLM} -eq 1 ]] && echo --use-vlm --vlm-model-id "${VLM_MODEL_ID}" ) \
-  $( [[ ${USE_QWEN_QA} -eq 1 ]] && echo --use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}" ) \
-  $( [[ ${OBJECT_FIRST} -eq 0 ]] && echo --no-object-first ) \
-  $( [[ ${SKIP_DETECTOR} -eq 1 ]] && echo --skip-detector ) \
-  $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr ) \
-  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip ) \
-  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen )
+PREFLIGHT_CMD=(
+  "${ENGINE_CMD[@]}"
+  --db "${DB_PATH}"
+  preflight
+)
+if [[ ${WITH_SAM3} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--with-sam3)
+fi
+if [[ ${USE_VLM} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--use-vlm --vlm-model-id "${VLM_MODEL_ID}")
+fi
+if [[ ${USE_QWEN_QA} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}")
+fi
+if [[ ${OBJECT_FIRST} -eq 0 ]]; then
+  PREFLIGHT_CMD+=(--no-object-first)
+fi
+if [[ ${SKIP_DETECTOR} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--skip-detector)
+fi
+if [[ ${SKIP_OCR} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--skip-ocr)
+fi
+if [[ ${SKIP_CLIP} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--skip-clip)
+fi
+if [[ ${SKIP_PRESCREEN} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--skip-prescreen)
+fi
+run_and_capture "${META_DIR}/preflight.json" "${PREFLIGHT_CMD[@]}"
 
 if [[ "${MODE}" == "products" || "${MODE}" == "products_all" ]]; then
   COLLECT_CMD=(
@@ -449,16 +467,30 @@ PHASE1_CMD=(
   --records-json "${FETCH_JSON}"
   --brand-records "${BRAND_JSON}"
   --review-output "${REVIEW_JSON}"
-  $( [[ ${WITH_SAM3} -eq 1 ]] && echo --segment-records "${SEGMENT_JSON}" --segment-enrich )
-  $( [[ ${SKIP_DETECTOR} -eq 1 ]] && echo --skip-detector )
-  $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr )
-  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip )
-  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen )
-  $( [[ ${USE_VLM} -eq 1 ]] && echo --use-vlm --vlm-model-id "${VLM_MODEL_ID}" )
-  $( [[ ${USE_QWEN_QA} -eq 1 ]] && echo --use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}" )
   "${RESUME_FLAG[@]}"
   "${DRY_RUN_FLAG[@]}"
 )
+if [[ ${WITH_SAM3} -eq 1 ]]; then
+  PHASE1_CMD+=(--segment-records "${SEGMENT_JSON}" --segment-enrich)
+fi
+if [[ ${SKIP_DETECTOR} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-detector)
+fi
+if [[ ${SKIP_OCR} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-ocr)
+fi
+if [[ ${SKIP_CLIP} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-clip)
+fi
+if [[ ${SKIP_PRESCREEN} -eq 1 ]]; then
+  PHASE1_CMD+=(--skip-prescreen)
+fi
+if [[ ${USE_VLM} -eq 1 ]]; then
+  PHASE1_CMD+=(--use-vlm --vlm-model-id "${VLM_MODEL_ID}")
+fi
+if [[ ${USE_QWEN_QA} -eq 1 ]]; then
+  PHASE1_CMD+=(--use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}")
+fi
 run_and_capture "${META_DIR}/phase1.json" "${PHASE1_CMD[@]}"
 
 EXPORT_CMD=(
