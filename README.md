@@ -24,6 +24,7 @@
 - 安裝腳本: [setup_env.sh](/raid/ming/logo/logo_data_engine/setup_env.sh)
 - 依賴: [requirements.txt](/raid/ming/logo/logo_data_engine/requirements.txt)
 - JSON 血緣與歸屬表: [JSON_LINEAGE.md](/raid/ming/logo/logo_data_engine/docs/JSON_LINEAGE.md)
+- 保守執行手冊: [RUNBOOK.md](/raid/ming/logo/logo_data_engine/docs/RUNBOOK.md)
 - 詳細 PDF/HTML 文件: [data_engine_guide_latex.pdf](/raid/ming/logo/logo_data_engine/docs/data_engine_guide_latex.pdf)
 
 ## 快速開始
