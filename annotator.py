@@ -9,9 +9,10 @@ from PIL import Image
 from .annotations import merge_signals
 from .backends import BLIPCaptionEngine, CLIPBrandRetriever, GroundingDINOProposalDetector, LLaMAVLMEngine, PaddleOCREngine, QwenKnowledgeEngine
 from .db import EngineDB
-from .qwen_reasoning import build_qwen_prompt_payload, run_qwen_logo_reasoning
-from .record_types import BrandCatalogEntry, BrandKnowledgeRecord, DetectionPayload, OCRPayload, ProductRecord
+from .qwen_reasoning import build_qwen_prompt_payload, build_qwen_text_only_payload, run_qwen_logo_reasoning
+from .record_types import BrandCatalogEntry, BrandKnowledgeRecord, DetectionPayload, LogoInstanceRow, OCRPayload, ProductRecord
 from .schema import canonical_brand_id, json_text, logo_instance_id, utcnow_iso
+from .verifier import classify_review_bucket, verify_text_consistency
 
 
 def brand_context_from_db(db: EngineDB) -> Dict[str, BrandKnowledgeRecord]:
@@ -91,6 +92,24 @@ def detect_and_ocr_image(
     }
 
 
+def text_only_detection(record: ProductRecord) -> DetectionPayload:
+    return {
+        "bbox_xyxy": [],
+        "detector_name": "text_only_metadata",
+        "detector_score": 0.0,
+        "detector_label": str(record.get("brand") or record.get("category") or "text_only"),
+        "prompt_context": {"mode": "text_only"},
+        "prompt_variants": [],
+        "ocr": {
+            "engine": "text_only",
+            "text": str(record.get("brand") or record.get("logo_grounding_label") or "").strip() or None,
+            "confidence": 0.0,
+            "lines": [],
+            "error": "text_only_mode",
+        },
+    }
+
+
 def annotate_db_proposals(
     db: EngineDB,
     *,
@@ -139,29 +158,35 @@ def annotate_db_proposals(
         query += f" LIMIT {int(limit)}"
 
     image_rows = db.conn.execute(query, params).fetchall()
-    rows = []
+    rows: List[LogoInstanceRow] = []
     skipped_existing = 0
     detector_failures = 0
+    text_only_instances = 0
+    verification_conflicts = 0
+    review_bucket_counts = {"auto_accept": 0, "spot_check": 0, "must_review": 0}
     for row in image_rows:
         record: ProductRecord = json.loads(str(row["raw_json"]))
         image_path = row["local_image_path"]
-        if not image_path or not Path(str(image_path)).exists():
-            continue
-        if detector is None or not detector.available:
-            detector_failures += 1
-            continue
         brand_key = str(record.get("brand") or row["brand_hint"] or "").strip().lower()
-        detection = detect_and_ocr_image(
-            image_path=image_path,
-            record=record,
-            brand_context=brand_context_index.get(brand_key),
-            detector=detector,
-            ocr_engine=ocr_engine,
-            skip_ocr=skip_ocr,
-        )
-        if not detection:
+        detection: DetectionPayload | None = None
+        image_exists = bool(image_path and Path(str(image_path)).exists())
+        if detector is not None and detector.available and image_exists:
+            detection = detect_and_ocr_image(
+                image_path=image_path,
+                record=record,
+                brand_context=brand_context_index.get(brand_key),
+                detector=detector,
+                ocr_engine=ocr_engine,
+                skip_ocr=skip_ocr,
+            )
+            if not detection:
+                detector_failures += 1
+        else:
             detector_failures += 1
-            continue
+
+        if detection is None:
+            detection = text_only_detection(record)
+            text_only_instances += 1
 
         ocr_payload = dict(detection["ocr"])
         clip_payload = None
@@ -172,8 +197,8 @@ def annotate_db_proposals(
             (clip_retriever is not None and clip_retriever.available)
             or (captioner is not None and captioner.available)
             or (vlm_engine is not None and vlm_engine.available)
-        ):
-            with Image.open(image_path) as opened:
+        ) and image_exists and detection["detector_name"] != "text_only_metadata" and detection["bbox_xyxy"]:
+            with Image.open(str(image_path)) as opened:
                 image = opened.convert("RGB")
                 logo_crop = crop_bbox(image, detection["bbox_xyxy"])
                 if clip_retriever is not None and clip_retriever.available:
@@ -208,20 +233,35 @@ def annotate_db_proposals(
                     }
 
         qwen_structured = None
-        if qwen_engine is not None and qwen_engine.available and str(row["quality_status"] or "") == "passed":
-            prompt_payload = build_qwen_prompt_payload(
-                brand_hint=record.get("brand"),
-                category=record.get("category"),
-                source_channel=record.get("source_channel"),
-                scene_bucket=record.get("scene_bucket"),
-                quality_status=row["quality_status"],
-                bbox_xyxy=detection.get("bbox_xyxy"),
-                ocr_text=ocr_payload.get("text"),
-                clip_matches=(clip_payload or {}).get("matches") if clip_payload else None,
-                caption=(vlm_payload or caption_payload or {}).get("logo_crop_caption")
-                or (vlm_payload or caption_payload or {}).get("full_image_caption"),
-                brand_record=brand_context_index.get(brand_key),
-            )
+        if qwen_engine is not None and qwen_engine.available and (str(row["quality_status"] or "") == "passed" or detection["detector_name"] == "text_only_metadata"):
+            if detection["detector_name"] == "text_only_metadata":
+                prompt_payload = build_qwen_text_only_payload(
+                    brand_hint=record.get("brand"),
+                    category=record.get("category"),
+                    source_channel=record.get("source_channel"),
+                    source_name=record.get("source"),
+                    scene_bucket=record.get("scene_bucket"),
+                    quality_status=row["quality_status"],
+                    product_name=record.get("product_name"),
+                    product_subtitle=record.get("product_subtitle"),
+                    color_description=record.get("color_description"),
+                    image_url=record.get("image_url"),
+                    brand_record=brand_context_index.get(brand_key),
+                )
+            else:
+                prompt_payload = build_qwen_prompt_payload(
+                    brand_hint=record.get("brand"),
+                    category=record.get("category"),
+                    source_channel=record.get("source_channel"),
+                    scene_bucket=record.get("scene_bucket"),
+                    quality_status=row["quality_status"],
+                    bbox_xyxy=detection.get("bbox_xyxy"),
+                    ocr_text=ocr_payload.get("text"),
+                    clip_matches=(clip_payload or {}).get("matches") if clip_payload else None,
+                    caption=(vlm_payload or caption_payload or {}).get("logo_crop_caption")
+                    or (vlm_payload or caption_payload or {}).get("full_image_caption"),
+                    brand_record=brand_context_index.get(brand_key),
+                )
             qwen_result = run_qwen_logo_reasoning(qwen_engine, prompt_payload)
             qwen_payload = {"mode": "multi_section", "prompt_payload": prompt_payload, "sections": qwen_result["section_traces"]}
             qwen_structured = qwen_result["split_payload"]
@@ -243,7 +283,7 @@ def annotate_db_proposals(
             merged["merged_brand_id"] = None
 
         proposal = {
-            "bbox_xyxy": detection["bbox_xyxy"],
+            "bbox_xyxy": detection["bbox_xyxy"] or None,
             "brand": merged["merged_brand_name"],
             "grounding_label": detection["detector_label"],
         }
@@ -251,6 +291,22 @@ def annotate_db_proposals(
         if resume and instance_id in existing_instance_ids:
             skipped_existing += 1
             continue
+
+        verification_payload = verify_text_consistency(
+            record=record,
+            merged=merged,
+            brand_record=brand_context_index.get(brand_key),
+            qwen_structured=qwen_structured,
+        )
+        if verification_payload["overall_status"] == "conflict":
+            verification_conflicts += 1
+        final_confidence = round((float(merged["confidence"] or 0.0) * 0.7) + (float(verification_payload["verification_score"] or 0.0) * 0.3), 4)
+        review_policy = classify_review_bucket(
+            confidence=final_confidence,
+            verification_payload=verification_payload,
+            brand_id=merged.get("merged_brand_id"),
+        )
+        review_bucket_counts[review_policy["review_bucket"]] = review_bucket_counts.get(review_policy["review_bucket"], 0) + 1
 
         now = utcnow_iso()
         rows.append(
@@ -262,11 +318,11 @@ def annotate_db_proposals(
                 "detector_name": detection["detector_name"],
                 "ocr_engine": ocr_payload.get("engine"),
                 "clip_engine": merged["clip"]["engine"],
-                "bbox_json": json_text(detection["bbox_xyxy"]),
+                "bbox_json": json_text(detection["bbox_xyxy"]) if detection["bbox_xyxy"] else None,
                 "polygon_json": None,
                 "rotated_box_json": None,
                 "mask_path": None,
-                "detector_score": detection["detector_score"],
+                "detector_score": detection["detector_score"] if detection["bbox_xyxy"] else None,
                 "ocr_text": ocr_payload.get("text"),
                 "ocr_confidence": ocr_payload.get("confidence"),
                 "clip_score": merged["clip"]["score"],
@@ -292,9 +348,11 @@ def annotate_db_proposals(
                 ),
                 "knowledge_json": json_text((qwen_structured or {}).get("knowledge_json")) if qwen_structured else None,
                 "risk_json": json_text((qwen_structured or {}).get("risk_json")) if qwen_structured else None,
-                "confidence": merged["confidence"],
-                "ambiguity_note": merged["ambiguity_note"],
-                "review_status": "needs_review" if merged["confidence"] < 0.9 else "auto_accept",
+                "verification_json": json_text(verification_payload),
+                "confidence": final_confidence,
+                "ambiguity_note": merged["ambiguity_note"] or ("verification_conflict" if verification_payload["overall_status"] == "conflict" else None),
+                "review_status": review_policy["review_status"],
+                "review_bucket": review_policy["review_bucket"],
                 "tier": tier,
                 "provenance_json": json_text(
                     {
@@ -309,6 +367,7 @@ def annotate_db_proposals(
                         "qwen_payload": qwen_payload,
                         "clip_retrieval": clip_payload,
                         "qwen_structured": qwen_structured,
+                        "text_only_mode": detection["detector_name"] == "text_only_metadata",
                     }
                 ),
                 "raw_json": json_text({"record": record, "detection": detection, "merged": merged}),
@@ -320,11 +379,28 @@ def annotate_db_proposals(
     if not dry_run:
         with db.transaction():
             db.upsert_logo_instances(rows, commit=False)
+            db.record_stage_metric(
+                "annotate_db",
+                {
+                    "seen_images": len(image_rows),
+                    "inserted_instances": len(rows),
+                    "skipped_existing": skipped_existing,
+                    "detector_failures": detector_failures,
+                    "text_only_instances": text_only_instances,
+                    "verification_conflicts": verification_conflicts,
+                    "review_bucket_counts": review_bucket_counts,
+                },
+                command_name="annotate-db",
+                commit=False,
+            )
     return {
         "seen_images": len(image_rows),
         "inserted_instances": len(rows),
         "skipped_existing": skipped_existing,
         "detector_failures": detector_failures,
+        "text_only_instances": text_only_instances,
+        "verification_conflicts": verification_conflicts,
+        "review_bucket_counts": review_bucket_counts,
         "detector_available": None if detector is None else detector.available,
         "detector_error": "disabled" if detector is None else detector.error,
         "ocr_available": None if ocr_engine is None else ocr_engine.available,

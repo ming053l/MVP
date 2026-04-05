@@ -21,6 +21,7 @@ DEFAULT_LICENSE="unknown"
 DRY_RUN=0
 RESUME=1
 SETUP_ENV=0
+PHASE1_LITE=0
 WITH_SAM3=1
 SAM3_CHECKPOINT=""
 SAM3_DEVICE=""
@@ -31,6 +32,8 @@ QWEN_MODEL_ID="Qwen/Qwen2.5-7B-Instruct"
 OBJECT_FIRST=1
 SKIP_OCR=0
 SKIP_DETECTOR=0
+SKIP_CLIP=0
+SKIP_PRESCREEN=0
 CUDA_DEVICES=""
 
 usage() {
@@ -56,6 +59,7 @@ Options:
   --metadata-csv PATH             Optional metadata CSV for external collection mode
   --default-license NAME          Default rights label for external inputs. Default: unknown
   --setup-env                     Run logo_data_engine/setup_env.sh before the pipeline
+  --phase1-lite                  Convenience mode: disable heavy visual models, keep image download + text verification
   --with-sam3                     Run SAM3 segmentation and import masks
   --no-sam3                       Skip SAM3 segmentation
   --sam3-checkpoint PATH          Optional SAM3 checkpoint path
@@ -64,6 +68,8 @@ Options:
   --no-object-first               Skip object-first stage (logo detection on full image)
   --skip-ocr                      Disable OCR enrichment
   --skip-detector                 Disable GroundingDINO proposal detection
+  --skip-clip                     Disable CLIP quality gate
+  --skip-prescreen                Disable YOLO logo prescreen gate
   --cuda-devices LIST             CUDA_VISIBLE_DEVICES override (e.g., 1 or 1,2,3)
   --use-vlm                       Enable LLaMA-style VLM caption/QA backend
   --no-vlm                        Skip VLM caption/QA backend
@@ -158,6 +164,10 @@ while [[ $# -gt 0 ]]; do
       SETUP_ENV=1
       shift
       ;;
+    --phase1-lite)
+      PHASE1_LITE=1
+      shift
+      ;;
     --with-sam3)
       WITH_SAM3=1
       shift
@@ -190,6 +200,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-detector)
       SKIP_DETECTOR=1
+      shift
+      ;;
+    --skip-clip)
+      SKIP_CLIP=1
+      shift
+      ;;
+    --skip-prescreen)
+      SKIP_PRESCREEN=1
       shift
       ;;
     --cuda-devices)
@@ -238,6 +256,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ ${PHASE1_LITE} -eq 1 ]]; then
+  WITH_SAM3=0
+  USE_VLM=0
+  USE_QWEN_QA=1
+  SKIP_OCR=1
+  SKIP_DETECTOR=1
+  SKIP_CLIP=1
+  SKIP_PRESCREEN=1
+fi
 
 if [[ -z "${MODE}" ]]; then
   echo "[error] choose one input mode: --all, --brands/--categories, --collection-root, or --manifest" >&2
@@ -317,7 +345,9 @@ run_and_capture "${META_DIR}/preflight.json" \
   $( [[ ${USE_QWEN_QA} -eq 1 ]] && echo --use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}" ) \
   $( [[ ${OBJECT_FIRST} -eq 0 ]] && echo --no-object-first ) \
   $( [[ ${SKIP_DETECTOR} -eq 1 ]] && echo --skip-detector ) \
-  $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr )
+  $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr ) \
+  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip ) \
+  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen )
 
 if [[ "${MODE}" == "products" || "${MODE}" == "products_all" ]]; then
   COLLECT_CMD=(
@@ -415,6 +445,8 @@ PHASE1_CMD=(
   $( [[ ${WITH_SAM3} -eq 1 ]] && echo --segment-records "${SEGMENT_JSON}" --segment-enrich )
   $( [[ ${SKIP_DETECTOR} -eq 1 ]] && echo --skip-detector )
   $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr )
+  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip )
+  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen )
   $( [[ ${USE_VLM} -eq 1 ]] && echo --use-vlm --vlm-model-id "${VLM_MODEL_ID}" )
   $( [[ ${USE_QWEN_QA} -eq 1 ]] && echo --use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}" )
   "${RESUME_FLAG[@]}"

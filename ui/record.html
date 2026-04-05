@@ -29,11 +29,17 @@
         <div class="stack">
           <div>
             <div class="img-title">Original</div>
+            {% if record.local_image_path %}
             <img src="/image?path={{ record.local_image_path }}" />
+            {% elif record.image_url %}
+            <img src="{{ record.image_url }}" />
+            {% endif %}
           </div>
           <div>
             <div class="img-title">BBox / Mask Overlay</div>
+            {% if record.local_image_path %}
             <img src="/overlay/{{ record.instance_id }}" />
+            {% endif %}
           </div>
           {% if record.mask_path %}
           <div>
@@ -43,14 +49,15 @@
           {% endif %}
         </div>
         <div class="actions">
-          <button onclick="setDecision('{{ record.instance_id }}','silver','needs_review')" class="primary">Keep → Silver</button>
-          <button onclick="setDecision('{{ record.instance_id }}','gold','needs_review')" class="primary">Keep → Gold</button>
+          <button onclick="setDecision('{{ record.instance_id }}','silver','reviewed_accept')" class="primary">Keep → Silver</button>
+          <button onclick="setDecision('{{ record.instance_id }}','gold','reviewed_accept')" class="primary">Keep → Gold</button>
           <button onclick="setDecision('{{ record.instance_id }}','proposal','rejected')" class="warn">Reject</button>
         </div>
         <div style="margin-top:8px;font-size:12px;">
           <span class="pill">Brand: {{ record.merged_brand_name or "unknown" }}</span>
           <span class="pill">Category: {{ record.category or "unknown" }}</span>
           <span class="pill">Status: {{ record.review_status or "needs_review" }}</span>
+          <span class="pill">Bucket: {{ record.review_bucket or "must_review" }}</span>
           <span class="pill">Tier: {{ record.tier }}</span>
           <br/><br/>
           Detector score: {{ record.detector_score }}<br/>
@@ -68,6 +75,8 @@
         <pre>{{ record.knowledge_json | tojson(indent=2) }}</pre>
         <h3>Risk</h3>
         <pre>{{ record.risk_json | tojson(indent=2) }}</pre>
+        <h3>Verification</h3>
+        <pre>{{ record.verification_json | tojson(indent=2) }}</pre>
         <h3>Logo Instance Raw</h3>
         <pre>{{ record.raw_json | tojson(indent=2) }}</pre>
         <h3>Image Record Raw</h3>

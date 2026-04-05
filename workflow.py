@@ -24,7 +24,13 @@ from .db import EngineDB
 from .engine import annotate_from_segment_records, brand_rows_from_records, ingest_image_records, load_json_list
 from .quality import evaluate_image_quality, gate_report
 from .record_types import ImageQualityUpdateRow, ReviewDecisionRow
-from .schema import utcnow_iso
+from .schema import stable_hash, utcnow_iso
+
+
+def _spot_check_selected(instance_id: str, sample_rate: float = 0.1) -> bool:
+    threshold = max(1, int(round(sample_rate * 100)))
+    bucket = int(stable_hash({"instance_id": instance_id}, length=8), 16) % 100
+    return bucket < threshold
 
 
 def repo_root() -> Path:
@@ -332,6 +338,12 @@ def seed_ontology_from_json(db: EngineDB, brand_records_path: str | Path, tier: 
     if not dry_run:
         with db.transaction():
             db.upsert_brand_records(brand_rows, commit=False)
+            db.record_stage_metric(
+                "seed_ontology",
+                {"inserted": len(brand_rows), "tier": tier, "recorded_at": utcnow_iso()},
+                command_name="seed-ontology",
+                commit=False,
+            )
     return {"inserted": len(brand_rows), "tier": tier, "dry_run": dry_run}
 
 
@@ -409,11 +421,23 @@ def gate_images(
             }
         )
 
+    summary = gate_report(evaluated)
+
     if not dry_run:
         with db.transaction():
             db.update_image_quality(updates, commit=False)
-
-    summary = gate_report(evaluated)
+            db.record_stage_metric(
+                "gate",
+                {
+                    "seen_images": len(image_rows),
+                    "updated_images": len(updates),
+                    "status_counts": summary["status_counts"],
+                    "failure_reason_counts": summary["failure_reason_counts"],
+                    "recorded_at": utcnow_iso(),
+                },
+                command_name="gate",
+                commit=False,
+            )
     result = {
         "seen_images": len(image_rows),
         "updated_images": len(updates),
@@ -437,21 +461,38 @@ def review_queue(
     limit: int = 200,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
-    rows = db.conn.execute(
+    candidate_rows = db.conn.execute(
         """
         SELECT li.instance_id, li.image_id, li.merged_brand_name, li.detector_score,
                li.ocr_text, li.ocr_confidence, li.clip_score, li.confidence, li.review_status,
-               li.tier, ir.local_image_path, ir.source_channel, ir.scene_bucket, ir.raw_json
+               li.review_bucket, li.verification_json, li.tier,
+               ir.local_image_path, ir.source_channel, ir.scene_bucket, ir.raw_json
         FROM logo_instances li
         JOIN image_records ir ON ir.image_id = li.image_id
-        WHERE li.review_status IS NULL OR li.review_status != 'auto_accept'
-        ORDER BY COALESCE(li.confidence, 0.0) ASC, li.created_at ASC
+        WHERE COALESCE(li.review_status, 'needs_review') NOT IN ('auto_accept', 'reviewed_accept', 'rejected')
+        ORDER BY
+            CASE COALESCE(li.review_bucket, 'must_review')
+                WHEN 'must_review' THEN 0
+                WHEN 'spot_check' THEN 1
+                ELSE 2
+            END,
+            COALESCE(li.confidence, 0.0) ASC,
+            li.created_at ASC
         LIMIT ?
         """,
-        [int(limit)],
+        [max(int(limit) * 20, int(limit))],
     ).fetchall()
     queue = []
-    for row in rows:
+    bucket_counts: Dict[str, int] = {"auto_accept": 0, "spot_check": 0, "must_review": 0}
+    selected_bucket_counts: Dict[str, int] = {"auto_accept": 0, "spot_check": 0, "must_review": 0}
+    for row in candidate_rows:
+        bucket = str(row["review_bucket"] or "must_review")
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        if bucket == "auto_accept":
+            continue
+        if bucket == "spot_check" and not _spot_check_selected(str(row["instance_id"])):
+            continue
+        selected_bucket_counts[bucket] = selected_bucket_counts.get(bucket, 0) + 1
         queue.append(
             {
                 "instance_id": row["instance_id"],
@@ -463,19 +504,39 @@ def review_queue(
                 "clip_score": row["clip_score"],
                 "confidence": row["confidence"],
                 "review_status": row["review_status"],
+                "review_bucket": bucket,
                 "tier": row["tier"],
                 "local_image_path": row["local_image_path"],
                 "source_channel": row["source_channel"],
                 "scene_bucket": row["scene_bucket"],
+                "verification": json.loads(str(row["verification_json"])) if row["verification_json"] else None,
                 "image_record": json.loads(str(row["raw_json"])),
             }
         )
+        if len(queue) >= int(limit):
+            break
 
     path = Path(output_path)
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"output": str(path), "records": len(queue), "dry_run": dry_run}
+        db.record_stage_metric(
+            "review_queue",
+            {
+                "records": len(queue),
+                "bucket_counts": bucket_counts,
+                "selected_bucket_counts": selected_bucket_counts,
+                "recorded_at": utcnow_iso(),
+            },
+            command_name="review-queue",
+        )
+    return {
+        "output": str(path),
+        "records": len(queue),
+        "bucket_counts": bucket_counts,
+        "selected_bucket_counts": selected_bucket_counts,
+        "dry_run": dry_run,
+    }
 
 
 def apply_review_queue(
@@ -504,6 +565,12 @@ def apply_review_queue(
     if not dry_run:
         with db.transaction():
             db.apply_review_decisions(rows, commit=False)
+            db.record_stage_metric(
+                "review_apply",
+                {"applied": len(rows), "recorded_at": utcnow_iso()},
+                command_name="review-apply",
+                commit=False,
+            )
     return {"input": str(decisions_path), "applied": len(rows), "dry_run": dry_run}
 
 
@@ -524,8 +591,10 @@ def phase1_workflow(
     caption_model_id: str = "Salesforce/blip-image-captioning-base",
     skip_detector: bool = False,
     skip_ocr: bool = False,
+    skip_clip: bool = False,
     skip_clip_retrieval: bool = False,
     skip_captioning: bool = False,
+    skip_prescreen: bool = False,
     use_vlm: bool = False,
     vlm_model_id: str = "llava-hf/llava-1.5-7b-hf",
     use_qwen_qa: bool = False,
@@ -544,6 +613,8 @@ def phase1_workflow(
         dry_run=dry_run,
         resume=resume,
         report=True,
+        skip_clip=skip_clip,
+        skip_prescreen=skip_prescreen,
     )
     if segment_records_json:
         annotation_stats = annotate_from_segment_records(
@@ -582,6 +653,19 @@ def phase1_workflow(
             qwen_model_id=qwen_model_id,
         )
     review_stats = review_queue(db, review_output, dry_run=dry_run)
+    if not dry_run:
+        db.record_stage_metric(
+            "phase1_workflow",
+            {
+                "ontology": ontology_stats,
+                "images": image_stats,
+                "gate": gate_stats,
+                "annotation": annotation_stats,
+                "review": review_stats,
+                "recorded_at": utcnow_iso(),
+            },
+            command_name="phase1-workflow",
+        )
     return {
         "ontology": ontology_stats,
         "images": image_stats,

@@ -31,8 +31,14 @@
         <input type="text" name="brand" placeholder="brand contains..." value="{{ brand or '' }}" />
         <select name="status">
           <option value="">all status</option>
-          {% for s in ["needs_review","auto_accept","rejected"] %}
+          {% for s in ["needs_review","auto_accept","reviewed_accept","rejected"] %}
           <option value="{{ s }}" {% if status==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <select name="bucket">
+          <option value="">all bucket</option>
+          {% for b in ["must_review","spot_check","auto_accept"] %}
+          <option value="{{ b }}" {% if bucket==b %}selected{% endif %}>{{ b }}</option>
           {% endfor %}
         </select>
         <select name="tier">
@@ -53,20 +59,26 @@
           <div class="thumbs">
             <div>
               <div class="thumb-label">Original</div>
+              {% if row.local_image_path %}
               <img class="thumb" src="/image?path={{ row.local_image_path }}" />
+              {% elif row.image_url %}
+              <img class="thumb" src="{{ row.image_url }}" />
+              {% endif %}
             </div>
             <div>
               <div class="thumb-label">Overlay</div>
+              {% if row.local_image_path %}
               <img class="thumb" src="/overlay/{{ row.instance_id }}" />
+              {% endif %}
             </div>
           </div>
         </a>
         <div class="meta">Brand: {{ row.merged_brand_name or "unknown" }}</div>
         <div class="meta">Category: {{ row.category or "unknown" }}</div>
-        <div class="meta">Status: {{ row.review_status or "needs_review" }} | Tier: {{ row.tier }}</div>
+        <div class="meta">Status: {{ row.review_status or "needs_review" }} | Bucket: {{ row.review_bucket or "must_review" }} | Tier: {{ row.tier }}</div>
         <div class="actions">
-          <button onclick="setDecision('{{ row.instance_id }}','silver','needs_review')" class="primary">Keep → Silver</button>
-          <button onclick="setDecision('{{ row.instance_id }}','gold','needs_review')" class="primary">Keep → Gold</button>
+          <button onclick="setDecision('{{ row.instance_id }}','silver','reviewed_accept')" class="primary">Keep → Silver</button>
+          <button onclick="setDecision('{{ row.instance_id }}','gold','reviewed_accept')" class="primary">Keep → Gold</button>
           <button onclick="setDecision('{{ row.instance_id }}','proposal','rejected')" class="warn">Reject</button>
         </div>
       </div>
@@ -75,10 +87,10 @@
 
     <div class="pagination">
       {% if offset - limit >= 0 %}
-        <a href="/?status={{ status or '' }}&tier={{ tier or '' }}&brand={{ brand or '' }}&limit={{ limit }}&offset={{ offset - limit }}">Prev</a>
+        <a href="/?status={{ status or '' }}&bucket={{ bucket or '' }}&tier={{ tier or '' }}&brand={{ brand or '' }}&limit={{ limit }}&offset={{ offset - limit }}">Prev</a>
       {% endif %}
       {% if offset + limit < total %}
-        <a href="/?status={{ status or '' }}&tier={{ tier or '' }}&brand={{ brand or '' }}&limit={{ limit }}&offset={{ offset + limit }}">Next</a>
+        <a href="/?status={{ status or '' }}&bucket={{ bucket or '' }}&tier={{ tier or '' }}&brand={{ brand or '' }}&limit={{ limit }}&offset={{ offset + limit }}">Next</a>
       {% endif %}
     </div>
 

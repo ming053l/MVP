@@ -125,8 +125,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     phase1.add_argument("--segment-enrich", action="store_true", help="Enrich SAM3 segments with OCR/CLIP/BLIP")
     phase1.add_argument("--skip-detector", action="store_true", help="Disable GroundingDINO proposal detection")
     phase1.add_argument("--skip-ocr", action="store_true", help="Disable OCR enrichment")
+    phase1.add_argument("--skip-clip", action="store_true", help="Disable CLIP quality gate")
     phase1.add_argument("--skip-clip-retrieval", action="store_true", help="Disable CLIP brand retrieval attribution")
     phase1.add_argument("--skip-captioning", action="store_true", help="Disable BLIP captioning enrichment")
+    phase1.add_argument("--skip-prescreen", action="store_true", help="Disable YOLO logo prescreen gate")
     phase1.add_argument("--clip-retrieval-model-id", default="openai/clip-vit-base-patch32", help="CLIP model for brand retrieval")
     phase1.add_argument("--caption-model-id", default="Salesforce/blip-image-captioning-base", help="Caption model for high-quality images")
     phase1.add_argument("--use-vlm", action="store_true", help="Enable LLaMA-style VLM caption/QA backend")
@@ -203,6 +205,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     summary = subparsers.add_parser("summary", help="Print table counts")
     summary.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
+
+    metrics = subparsers.add_parser("metrics-summary", help="Show recently recorded stage metrics")
+    metrics.add_argument("--stage", default=None, help="Optional stage_name filter")
+    metrics.add_argument("--limit", type=int, default=20, help="Max number of metric rows")
+    metrics.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
 
     batch_plan = subparsers.add_parser("batch-plan", help="Compute the recommended per-pair fetch limit for a target batch size")
     batch_plan.add_argument("--target", type=int, required=True, help="Target number of records")
@@ -372,8 +379,10 @@ def main(argv: list[str] | None = None) -> int:
                 caption_model_id=args.caption_model_id,
                 skip_detector=args.skip_detector,
                 skip_ocr=args.skip_ocr,
+                skip_clip=args.skip_clip,
                 skip_clip_retrieval=args.skip_clip_retrieval,
                 skip_captioning=args.skip_captioning,
+                skip_prescreen=args.skip_prescreen,
                 use_vlm=args.use_vlm,
                 vlm_model_id=args.vlm_model_id,
                 use_qwen_qa=args.use_qwen_qa,
@@ -478,6 +487,13 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "summary":
             result = {"db": str(db_path), "counts": db.table_counts()}
+
+        elif args.command == "metrics-summary":
+            result = {
+                "db": str(db_path),
+                "stage": args.stage,
+                "metrics": db.recent_stage_metrics(stage_name=args.stage, limit=args.limit),
+            }
 
         elif args.command == "batch-plan":
             result = {

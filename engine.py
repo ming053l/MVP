@@ -19,6 +19,7 @@ from .schema import (
     scene_bucket_from_record,
     utcnow_iso,
 )
+from .verifier import classify_review_bucket, verify_text_consistency
 
 
 def load_json_list(path: str | Path) -> List[Dict[str, Any]]:
@@ -35,6 +36,15 @@ def load_run_payloads(run_dir: str | Path) -> Dict[str, List[Dict[str, Any]]]:
         "images": load_json_list(run_path / "fetch" / "records.json"),
         "segments": load_json_list(run_path / "segment" / "records_with_logo_masks.json"),
     }
+
+
+def brand_context_by_id(db: EngineDB) -> Dict[str, Dict[str, Any]]:
+    rows = db.conn.execute("SELECT brand_id, knowledge_json FROM brand_records").fetchall()
+    context: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        payload = json.loads(str(row["knowledge_json"]))
+        context[str(row["brand_id"])] = payload
+    return context
 
 
 def brand_rows_from_records(brand_records: Iterable[BrandKnowledgeRecord], tier: str) -> List[BrandRow]:
@@ -127,6 +137,7 @@ def ingest_image_records(
     if not dry_run:
         with db.transaction():
             db.upsert_image_records(rows, commit=False)
+            db.record_stage_metric("ingest_images", stats, command_name="ingest-images", commit=False)
     return stats
 
 
@@ -163,6 +174,7 @@ def annotate_from_segment_records(
     }
     brand_index = db.brand_name_index()
     known_brand_ids = db.brand_ids()
+    brand_context = brand_context_by_id(db)
 
     if not enrich:
         rows = imported_logo_instances(segment_records, {k: v["image_id"] for k, v in image_id_by_external_key.items()}, brand_index, tier=tier)
@@ -281,6 +293,8 @@ def annotate_from_segment_records(
                 clip_payload=clip_payload,
                 caption_payload=vlm_payload or caption_payload,
             )
+            if merged.get("merged_brand_id") and str(merged["merged_brand_id"]) not in known_brand_ids:
+                merged["merged_brand_id"] = None
 
             proposal = {
                 "bbox_xyxy": bbox,
@@ -289,6 +303,18 @@ def annotate_from_segment_records(
                 "grounding_label": record.get("logo_grounding_label"),
             }
             instance_id = logo_instance_id(image_id, proposal)
+            verification_payload = verify_text_consistency(
+                record=record,
+                merged=merged,
+                brand_record=brand_context.get(str(merged.get("merged_brand_id") or "")),
+                qwen_structured=qwen_structured,
+            )
+            final_confidence = round((float(merged["confidence"] or 0.0) * 0.7) + (float(verification_payload["verification_score"] or 0.0) * 0.3), 4)
+            review_policy = classify_review_bucket(
+                confidence=final_confidence,
+                verification_payload=verification_payload,
+                brand_id=merged.get("merged_brand_id"),
+            )
 
             rows.append(
                 {
@@ -326,9 +352,11 @@ def annotate_from_segment_records(
                     ),
                     "knowledge_json": json_text((qwen_structured or {}).get("knowledge_json")) if qwen_structured else None,
                     "risk_json": json_text((qwen_structured or {}).get("risk_json")) if qwen_structured else None,
-                    "confidence": merged["confidence"],
-                    "ambiguity_note": merged["ambiguity_note"],
-                    "review_status": str(record.get("logo_bbox_review_status") or record.get("logo_mask_review_status") or "proposal"),
+                    "verification_json": json_text(verification_payload),
+                    "confidence": final_confidence,
+                    "ambiguity_note": merged["ambiguity_note"] or ("verification_conflict" if verification_payload["overall_status"] == "conflict" else None),
+                    "review_status": review_policy["review_status"],
+                    "review_bucket": review_policy["review_bucket"],
                     "tier": tier,
                     "provenance_json": json_text(
                         {
@@ -346,9 +374,6 @@ def annotate_from_segment_records(
                     "updated_at": timestamp,
                 }
             )
-    for row in rows:
-        if row.get("brand_id") and str(row["brand_id"]) not in known_brand_ids:
-            row["brand_id"] = None
     skipped_existing = 0
     if resume:
         skipped_existing = sum(1 for row in rows if str(row["instance_id"]) in existing_instance_ids)
@@ -361,6 +386,7 @@ def annotate_from_segment_records(
     if not dry_run:
         with db.transaction():
             db.upsert_logo_instances(rows, commit=False)
+            db.record_stage_metric("annotate_segments", stats, command_name="annotate-proposals", commit=False)
     return stats
 
 

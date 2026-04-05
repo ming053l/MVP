@@ -42,6 +42,7 @@ def fetch_rows(
     db: EngineDB,
     *,
     status: Optional[str],
+    bucket: Optional[str],
     tier: Optional[str],
     brand: Optional[str],
     limit: int,
@@ -52,6 +53,9 @@ def fetch_rows(
     if status:
         clauses.append("COALESCE(li.review_status, 'needs_review') = ?")
         params.append(status)
+    if bucket:
+        clauses.append("COALESCE(li.review_bucket, 'must_review') = ?")
+        params.append(bucket)
     if tier:
         clauses.append("li.tier = ?")
         params.append(tier)
@@ -62,8 +66,8 @@ def fetch_rows(
     query = f"""
         SELECT li.instance_id, li.image_id, li.merged_brand_name, li.review_status, li.tier,
                li.detector_score, li.clip_score, li.ocr_text, li.caption_text,
-               li.knowledge_json, li.risk_json, li.bbox_json, li.mask_path,
-               ir.local_image_path, ir.source_channel, ir.category
+               li.knowledge_json, li.risk_json, li.verification_json, li.review_bucket, li.bbox_json, li.mask_path,
+               ir.local_image_path, ir.image_url, ir.source_channel, ir.category
         FROM logo_instances li
         JOIN image_records ir ON li.image_id = ir.image_id
         {where}
@@ -75,12 +79,15 @@ def fetch_rows(
     return [dict(row) for row in rows]
 
 
-def fetch_total(db: EngineDB, *, status: Optional[str], tier: Optional[str], brand: Optional[str]) -> int:
+def fetch_total(db: EngineDB, *, status: Optional[str], bucket: Optional[str], tier: Optional[str], brand: Optional[str]) -> int:
     clauses = []
     params: List[Any] = []
     if status:
         clauses.append("COALESCE(li.review_status, 'needs_review') = ?")
         params.append(status)
+    if bucket:
+        clauses.append("COALESCE(li.review_bucket, 'must_review') = ?")
+        params.append(bucket)
     if tier:
         clauses.append("li.tier = ?")
         params.append(tier)
@@ -100,7 +107,7 @@ def fetch_total(db: EngineDB, *, status: Optional[str], tier: Optional[str], bra
 
 def fetch_record(db: EngineDB, instance_id: str) -> Dict[str, Any]:
     query = """
-        SELECT li.*, ir.local_image_path, ir.source_channel, ir.category, ir.raw_json AS image_raw_json
+        SELECT li.*, ir.local_image_path, ir.image_url, ir.source_channel, ir.category, ir.raw_json AS image_raw_json
         FROM logo_instances li
         JOIN image_records ir ON li.image_id = ir.image_id
         WHERE li.instance_id = ?
@@ -113,6 +120,7 @@ def fetch_record(db: EngineDB, instance_id: str) -> Dict[str, Any]:
     payload["attribution_json"] = json.loads(str(row["attribution_json"])) if row["attribution_json"] else None
     payload["knowledge_json"] = json.loads(str(row["knowledge_json"])) if row["knowledge_json"] else None
     payload["risk_json"] = json.loads(str(row["risk_json"])) if row["risk_json"] else None
+    payload["verification_json"] = json.loads(str(row["verification_json"])) if row["verification_json"] else None
     payload["provenance_json"] = json.loads(str(row["provenance_json"])) if row["provenance_json"] else None
     payload["raw_json"] = json.loads(str(row["raw_json"])) if row["raw_json"] else None
     payload["image_raw_json"] = json.loads(str(row["image_raw_json"])) if row["image_raw_json"] else None
@@ -167,14 +175,15 @@ def create_app(db_path: Path, image_root: Path) -> FastAPI:
     def index(
         request: Request,
         status: Optional[str] = Query(default="needs_review"),
+        bucket: Optional[str] = Query(default=None),
         tier: Optional[str] = Query(default=None),
         brand: Optional[str] = Query(default=None),
         limit: int = Query(default=24, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> HTMLResponse:
         with EngineDB(db_path) as db:
-            rows = fetch_rows(db, status=status, tier=tier, brand=brand, limit=limit, offset=offset)
-            total = fetch_total(db, status=status, tier=tier, brand=brand)
+            rows = fetch_rows(db, status=status, bucket=bucket, tier=tier, brand=brand, limit=limit, offset=offset)
+            total = fetch_total(db, status=status, bucket=bucket, tier=tier, brand=brand)
         return templates.TemplateResponse(
             "index.html",
             {
@@ -184,6 +193,7 @@ def create_app(db_path: Path, image_root: Path) -> FastAPI:
                 "limit": limit,
                 "offset": offset,
                 "status": status,
+                "bucket": bucket,
                 "tier": tier,
                 "brand": brand,
             },

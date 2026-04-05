@@ -275,9 +275,11 @@ def imported_logo_instances(
                 ),
                 "knowledge_json": None,
                 "risk_json": None,
+                "verification_json": None,
                 "confidence": merged["confidence"],
                 "ambiguity_note": merged["ambiguity_note"],
                 "review_status": review_status,
+                "review_bucket": "auto_accept" if review_status == "auto_accept" else "must_review",
                 "tier": tier,
                 "provenance_json": json_text(
                     {

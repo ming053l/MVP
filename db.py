@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List
 
-from .record_types import BrandRow, ImageQualityUpdateRow, ImageRow, LogoInstanceRow, ReviewDecisionRow
+from .record_types import BrandRow, ImageQualityUpdateRow, ImageRow, LogoInstanceRow, ReviewDecisionRow, StageMetricRow
 
 
 class EngineDB:
@@ -105,9 +105,11 @@ class EngineDB:
                 attribution_json TEXT,
                 knowledge_json TEXT,
                 risk_json TEXT,
+                verification_json TEXT,
                 confidence REAL,
                 ambiguity_note TEXT,
                 review_status TEXT,
+                review_bucket TEXT,
                 tier TEXT NOT NULL,
                 provenance_json TEXT NOT NULL,
                 raw_json TEXT NOT NULL,
@@ -129,6 +131,15 @@ class EngineDB:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS stage_metrics (
+                metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                stage_name TEXT NOT NULL,
+                command_name TEXT,
+                metrics_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             """
         )
         self._ensure_column("image_records", "quality_status", "TEXT")
@@ -141,7 +152,10 @@ class EngineDB:
         self._ensure_column("logo_instances", "attribution_json", "TEXT")
         self._ensure_column("logo_instances", "knowledge_json", "TEXT")
         self._ensure_column("logo_instances", "risk_json", "TEXT")
+        self._ensure_column("logo_instances", "verification_json", "TEXT")
+        self._ensure_column("logo_instances", "review_bucket", "TEXT")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_records_quality_status ON image_records(quality_status)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stage_metrics_run_stage ON stage_metrics(run_id, stage_name, created_at)")
         self.conn.commit()
 
     def _ensure_column(self, table: str, column: str, column_type: str) -> None:
@@ -154,6 +168,14 @@ class EngineDB:
 
     def _execute_many(self, query: str, rows: Iterable[Dict[str, Any]]) -> None:
         self.conn.executemany(query, list(rows))
+
+    def _derive_run_id(self) -> str:
+        parts = list(self.path.parts)
+        if "results" in parts:
+            idx = parts.index("results")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+        return self.path.stem
 
     @staticmethod
     def _loads_json(value: Any) -> Any:
@@ -246,16 +268,16 @@ class EngineDB:
                 instance_id, image_id, brand_id, merged_brand_name, detector_name, ocr_engine,
                 clip_engine, bbox_json, polygon_json, rotated_box_json, mask_path, detector_score,
                 ocr_text, ocr_confidence, clip_score, caption_text, caption_model, attribution_json,
-                knowledge_json, risk_json,
-                confidence, ambiguity_note, review_status,
+                knowledge_json, risk_json, verification_json,
+                confidence, ambiguity_note, review_status, review_bucket,
                 tier, provenance_json, raw_json, created_at, updated_at
             )
             VALUES (
                 :instance_id, :image_id, :brand_id, :merged_brand_name, :detector_name, :ocr_engine,
                 :clip_engine, :bbox_json, :polygon_json, :rotated_box_json, :mask_path, :detector_score,
                 :ocr_text, :ocr_confidence, :clip_score, :caption_text, :caption_model, :attribution_json,
-                :knowledge_json, :risk_json,
-                :confidence, :ambiguity_note, :review_status,
+                :knowledge_json, :risk_json, :verification_json,
+                :confidence, :ambiguity_note, :review_status, :review_bucket,
                 :tier, :provenance_json, :raw_json, :created_at, :updated_at
             )
             ON CONFLICT(instance_id) DO UPDATE SET
@@ -278,9 +300,11 @@ class EngineDB:
                 attribution_json=excluded.attribution_json,
                 knowledge_json=excluded.knowledge_json,
                 risk_json=excluded.risk_json,
+                verification_json=excluded.verification_json,
                 confidence=excluded.confidence,
                 ambiguity_note=excluded.ambiguity_note,
                 review_status=excluded.review_status,
+                review_bucket=excluded.review_bucket,
                 tier=excluded.tier,
                 provenance_json=excluded.provenance_json,
                 raw_json=excluded.raw_json,
@@ -291,6 +315,37 @@ class EngineDB:
         if commit:
             self.conn.commit()
         return len(rows)
+
+    def record_stage_metric(
+        self,
+        stage_name: str,
+        metrics: Dict[str, Any],
+        *,
+        command_name: str | None = None,
+        run_id: str | None = None,
+        commit: bool = True,
+    ) -> None:
+        row: StageMetricRow = {
+            "run_id": run_id or self._derive_run_id(),
+            "stage_name": stage_name,
+            "command_name": command_name,
+            "metrics_json": json.dumps(metrics, ensure_ascii=False, sort_keys=True),
+            "created_at": metrics.get("recorded_at") or metrics.get("created_at") or self._derive_timestamp(),
+        }
+        self.conn.execute(
+            """
+            INSERT INTO stage_metrics (run_id, stage_name, command_name, metrics_json, created_at)
+            VALUES (:run_id, :stage_name, :command_name, :metrics_json, :created_at)
+            """,
+            row,
+        )
+        if commit:
+            self.conn.commit()
+
+    def _derive_timestamp(self) -> str:
+        from .schema import utcnow_iso
+
+        return utcnow_iso()
 
     def existing_phashes(self) -> set[str]:
         rows = self.conn.execute(
@@ -452,9 +507,11 @@ class EngineDB:
                         "attribution": self._loads_json(row["attribution_json"]),
                         "knowledge": self._loads_json(row["knowledge_json"]),
                         "risk": self._loads_json(row["risk_json"]),
+                        "verification": self._loads_json(row["verification_json"]),
                         "confidence": row["confidence"],
                         "ambiguity_note": row["ambiguity_note"],
                         "review_status": row["review_status"],
+                        "review_bucket": row["review_bucket"],
                         "tier": row["tier"],
                         "provenance": self._loads_json(row["provenance_json"]),
                         "brand_record": brand_record,
@@ -508,3 +565,22 @@ class EngineDB:
         if commit:
             self.conn.commit()
         return len(rows)
+
+    def recent_stage_metrics(self, *, stage_name: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+        query = """
+            SELECT metric_id, run_id, stage_name, command_name, metrics_json, created_at
+            FROM stage_metrics
+        """
+        params: List[Any] = []
+        if stage_name:
+            query += " WHERE stage_name = ?"
+            params.append(stage_name)
+        query += " ORDER BY metric_id DESC LIMIT ?"
+        params.append(int(limit))
+        rows = self.conn.execute(query, params).fetchall()
+        payloads: List[Dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            payload["metrics"] = self._loads_json(row["metrics_json"]) or {}
+            payloads.append(payload)
+        return payloads

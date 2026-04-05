@@ -121,6 +121,40 @@ def build_qwen_prompt_payload(
     }
 
 
+def build_qwen_text_only_payload(
+    *,
+    brand_hint: Any,
+    category: Any,
+    source_channel: Any,
+    source_name: Any = None,
+    scene_bucket: Any = None,
+    quality_status: Any = None,
+    product_name: Any = None,
+    product_subtitle: Any = None,
+    color_description: Any = None,
+    image_url: Any = None,
+    brand_record: Any = None,
+) -> Dict[str, Any]:
+    return {
+        "mode": "text_only",
+        "brand_hint": brand_hint,
+        "category": category,
+        "source_channel": source_channel,
+        "source_name": source_name,
+        "scene_bucket": scene_bucket,
+        "quality_status": quality_status,
+        "product_name": product_name,
+        "product_subtitle": product_subtitle,
+        "color_description": color_description,
+        "image_url": image_url,
+        "brand_record": brand_record,
+        "bbox_xyxy": None,
+        "ocr_text": None,
+        "clip_matches": None,
+        "caption": None,
+    }
+
+
 def run_qwen_logo_reasoning(qwen_engine: Any, prompt_payload: Dict[str, Any]) -> Dict[str, Any]:
     section_results: Dict[str, Any] = {}
     section_traces: Dict[str, Any] = {}

@@ -126,9 +126,11 @@ class LogoInstanceRow(TypedDict):
     attribution_json: str | None
     knowledge_json: str | None
     risk_json: str | None
+    verification_json: str | None
     confidence: float | None
     ambiguity_note: str | None
     review_status: str | None
+    review_bucket: str | None
     tier: str
     provenance_json: str
     raw_json: str
@@ -151,3 +153,11 @@ class ReviewDecisionRow(TypedDict):
     tier: str
     review_status: str
     updated_at: str
+
+
+class StageMetricRow(TypedDict):
+    run_id: str
+    stage_name: str
+    command_name: str | None
+    metrics_json: str
+    created_at: str

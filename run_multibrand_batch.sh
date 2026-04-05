@@ -12,6 +12,7 @@ TARGET_RECORDS=500
 OVERSAMPLE_FACTOR=3
 RESUME=1
 SETUP_ENV=0
+PHASE1_LITE=0
 WITH_SAM3=1
 SAM3_CHECKPOINT=""
 SAM3_DEVICE=""
@@ -22,6 +23,8 @@ QWEN_MODEL_ID="Qwen/Qwen2.5-7B-Instruct"
 OBJECT_FIRST=1
 SKIP_OCR=0
 SKIP_DETECTOR=0
+SKIP_CLIP=0
+SKIP_PRESCREEN=0
 CUDA_DEVICES=""
 
 usage() {
@@ -36,6 +39,7 @@ Options:
   --output-root PATH    Parent output directory. Default: /raid/ming/logo/logo_data_engine/results
   --env-name NAME       Conda env name. Default: logo_sam3
   --setup-env           Run logo_data_engine/setup_env.sh before the batch
+  --phase1-lite         Convenience mode: disable heavy visual models, keep image download + text verification
   --with-sam3           Run SAM3 segmentation and import masks
   --no-sam3             Skip SAM3 segmentation
   --sam3-checkpoint PATH Optional SAM3 checkpoint path
@@ -49,6 +53,8 @@ Options:
   --no-object-first     Skip object-first stage (logo detection on full image)
   --skip-ocr            Disable OCR enrichment
   --skip-detector       Disable GroundingDINO proposal detection
+  --skip-clip           Disable CLIP quality gate
+  --skip-prescreen      Disable YOLO logo prescreen gate
   --cuda-devices LIST   CUDA_VISIBLE_DEVICES override (e.g., 1 or 1,2,3)
   --no-resume           Do not pass --resume to phase1-workflow
   --help                Show this help
@@ -93,6 +99,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --setup-env)
       SETUP_ENV=1
+      shift
+      ;;
+    --phase1-lite)
+      PHASE1_LITE=1
       shift
       ;;
     --with-sam3)
@@ -155,6 +165,14 @@ while [[ $# -gt 0 ]]; do
       SKIP_DETECTOR=1
       shift
       ;;
+    --skip-clip)
+      SKIP_CLIP=1
+      shift
+      ;;
+    --skip-prescreen)
+      SKIP_PRESCREEN=1
+      shift
+      ;;
     --cuda-devices)
       require_arg "$1" "${2:-}"
       CUDA_DEVICES="$2"
@@ -171,6 +189,16 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ ${PHASE1_LITE} -eq 1 ]]; then
+  WITH_SAM3=0
+  USE_VLM=0
+  USE_QWEN_QA=1
+  SKIP_OCR=1
+  SKIP_DETECTOR=1
+  SKIP_CLIP=1
+  SKIP_PRESCREEN=1
+fi
 
 source "${HOME}/anaconda3/etc/profile.d/conda.sh"
 
@@ -253,6 +281,12 @@ fi
 if [[ ${SKIP_OCR} -eq 1 ]]; then
   PREFLIGHT_CMD+=(--skip-ocr)
 fi
+if [[ ${SKIP_CLIP} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--skip-clip)
+fi
+if [[ ${SKIP_PRESCREEN} -eq 1 ]]; then
+  PREFLIGHT_CMD+=(--skip-prescreen)
+fi
 run_and_capture "${META_DIR}/preflight.json" "${PREFLIGHT_CMD[@]}"
 
 run_and_capture "${PLAN_JSON}" \
@@ -312,6 +346,8 @@ run_and_capture "${META_DIR}/staging_gate.json" \
   --db "${STAGING_DB_PATH}" \
   gate \
   --all \
+  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip ) \
+  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen ) \
   --report
 
 run_and_capture "${META_DIR}/export_passed.json" \
@@ -377,6 +413,8 @@ run_and_capture "${META_DIR}/phase1.json" \
   $( [[ ${WITH_SAM3} -eq 1 ]] && echo --segment-records "${SEGMENT_JSON}" --segment-enrich ) \
   $( [[ ${SKIP_DETECTOR} -eq 1 ]] && echo --skip-detector ) \
   $( [[ ${SKIP_OCR} -eq 1 ]] && echo --skip-ocr ) \
+  $( [[ ${SKIP_CLIP} -eq 1 ]] && echo --skip-clip ) \
+  $( [[ ${SKIP_PRESCREEN} -eq 1 ]] && echo --skip-prescreen ) \
   $( [[ ${USE_VLM} -eq 1 ]] && echo --use-vlm --vlm-model-id "${VLM_MODEL_ID}" ) \
   $( [[ ${USE_QWEN_QA} -eq 1 ]] && echo --use-qwen-qa --qwen-model-id "${QWEN_MODEL_ID}" ) \
   "${RESUME_FLAG[@]}"
