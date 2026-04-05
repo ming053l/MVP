@@ -100,6 +100,11 @@ CUDA_VISIBLE_DEVICES=1 python -m logo_data_engine \
 
 如果 `ready: false`，先不要繼續。
 
+補充：
+
+- `--phase1-lite` 會自動打開 `Qwen`，但不會自動改 `Qwen model id`
+- 如果你想換模型，例如 14B，請額外明確傳入 `--qwen-model-id`
+
 ### 1.3 抓資料
 
 ```bash
@@ -235,8 +240,13 @@ python -m logo_data_engine \
   --output "$ROOT/review/review_queue.json"
 ```
 
-如果你是直接在 UI 裡按 `reject / silver / gold`，通常不用額外跑 `review-apply`。  
-只有你手動修改 `review_queue.json` 後，才需要：
+這裡要特別講清楚：
+
+- Review UI 的按鈕會直接呼叫 API，把 decision 直接寫進 SQLite DB
+- 所以如果你是在 UI 裡按 `reject / silver / gold`，通常不用再跑 `review-apply`
+- `review_queue.json` 比較像是離線匯出 / 批次編修用的 queue snapshot，不是 UI 的唯一資料來源
+
+只有你手動修改 `review_queue.json`，想把那份 JSON 裡的 decision 批次寫回 DB 時，才需要：
 
 ```bash
 cd /raid/ming/logo
@@ -291,6 +301,14 @@ cd /raid/ming/logo
   --target-records 30 \
   --oversample-factor 2
 ```
+
+如果你要在 batch 模式下改用別的 Qwen，例如 14B，請另外加上：
+
+```bash
+--qwen-model-id Qwen/Qwen2.5-14B-Instruct
+```
+
+也就是說，`--phase1-lite` 只會幫你打開 Qwen，不會覆寫模型名稱。
 
 跑完之後，報表會自動生成在：
 
